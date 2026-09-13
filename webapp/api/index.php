@@ -347,19 +347,25 @@ try {
                         for ($i = 1; $i <= 5; $i++) {
                             $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
                             $label = "Quiz " . $i;
-                            $stmt3->bind_param("isii", $categoryId, $label, 10, $i - 1);
+                            $maxScore = 10;
+                            $sortOrder = $i - 1;
+                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
                             $stmt3->execute();
                         }
                     } elseif ($cat[1] === 'Problem Set') {
                         for ($i = 1; $i <= 3; $i++) {
                             $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
                             $label = "Problem Set " . $i;
-                            $stmt3->bind_param("isii", $categoryId, $label, 20, $i - 1);
+                            $maxScore = 20;
+                            $sortOrder = $i - 1;
+                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
                             $stmt3->execute();
                         }
                     } else {
                         $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                        $stmt3->bind_param("isii", $categoryId, $cat[1], 100, 0);
+                        $maxScore = 100;
+                        $sortOrder = 0;
+                        $stmt3->bind_param("isii", $categoryId, $cat[1], $maxScore, $sortOrder);
                         $stmt3->execute();
                     }
                 }
@@ -404,19 +410,25 @@ try {
                         for ($i = 1; $i <= 5; $i++) {
                             $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
                             $label = "Quiz " . $i;
-                            $stmt3->bind_param("isii", $categoryId, $label, 10, $i - 1);
+                            $maxScore = 10;
+                            $sortOrder = $i - 1;
+                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
                             $stmt3->execute();
                         }
                     } elseif ($cat[1] === 'Problem Set') {
                         for ($i = 1; $i <= 3; $i++) {
                             $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
                             $label = "Problem Set " . $i;
-                            $stmt3->bind_param("isii", $categoryId, $label, 20, $i - 1);
+                            $maxScore = 20;
+                            $sortOrder = $i - 1;
+                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
                             $stmt3->execute();
                         }
                     } else {
                         $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                        $stmt3->bind_param("isii", $categoryId, $cat[1], 100, 0);
+                        $maxScore = 100;
+                        $sortOrder = 0;
+                        $stmt3->bind_param("isii", $categoryId, $cat[1], $maxScore, $sortOrder);
                         $stmt3->execute();
                     }
                 }
@@ -558,7 +570,8 @@ try {
         
         if ($categoryId) {
             $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-            $stmt3->bind_param("isdi", $categoryId, $name, $maxScore, 0);
+            $sortOrder = 0;
+            $stmt3->bind_param("isdi", $categoryId, $name, $maxScore, $sortOrder);
             $stmt3->execute();
         }
         
@@ -676,7 +689,7 @@ try {
         $db->query("DELETE FROM grade_item WHERE grade_category_id IN (SELECT id FROM grade_category WHERE class_section_id = $classId)");
         $db->query("DELETE FROM grade_category WHERE class_section_id = $classId");
         $db->query("DELETE FROM student WHERE class_section_id = $classId");
-        $db->query("DELETE FROM attendance_record WHERE attendance_session_id IN (SELECT id FROM attendance_session WHERE class_section_id = $classId))");
+        $db->query("DELETE FROM attendance_record WHERE attendance_session_id IN (SELECT id FROM attendance_session WHERE class_section_id = $classId)");
         $db->query("DELETE FROM attendance_session WHERE class_section_id = $classId");
         $db->query("DELETE FROM class_section WHERE id = $classId");
         echo ResponseAPI::success([], "Class deleted");

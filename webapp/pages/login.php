@@ -49,6 +49,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <div class="login-footer">
                 <p class="mb-0">Demo credentials:<br>
                 <code>admin@test.com</code> / <code>password</code></p>
+                <p class="mb-0 mt-3">
+                    Don't have an account? <a href="index.php?page=register" class="text-decoration-none">Sign Up</a>
+                </p>
             </div>
         </div>
     </div>

@@ -155,4 +155,15 @@ function logAudit($db, $faculty_id, $action, $table_name, $record_id, $old_value
     $stmt->bind_param("ississ", $faculty_id, $action, $table_name, $record_id, $old_value, $new_value);
     $stmt->execute();
 }
+
+function csrf_token() {
+    if (empty($_SESSION['csrf_token'])) {
+        $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['csrf_token'];
+}
+
+function verify_csrf($token) {
+    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+}
 ?>

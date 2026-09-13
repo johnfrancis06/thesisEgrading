@@ -3,16 +3,55 @@ ob_start();
 ini_set('display_errors', 0);
 error_reporting(E_ALL);
 
-require_once '../config/db.php';
-require_once '../includes/helpers.php';
-require_once '../includes/auth.php';
+require_once 'config/db.php';
+require_once 'includes/helpers.php';
+require_once 'includes/auth.php';
+
+$page = $_GET['page'] ?? '';
+$action = $_GET['action'] ?? '';
+
+$db = Database::getInstance()->getConnection();
+$faculty_id = $auth->getFacultyId();
+
+$validPages = ['dashboard', 'classes', 'subjects', 'section-enrollment', 'grading', 'attendance', 'reports', 'students', 'login', 'logout', 'register'];
+
+if ($page && in_array($page, $validPages)) {
+    if ($page === 'login') {
+        if ($auth->isLoggedIn()) {
+            header("Location: index.php?page=dashboard");
+            exit;
+        }
+        include 'pages/login.php';
+        exit;
+    }
+    if ($page === 'register') {
+        include 'pages/register.php';
+        exit;
+    }
+    if ($page === 'logout') {
+        $auth->logout();
+        header("Location: index.php?page=login");
+        exit;
+    }
+    $auth->requireLogin();
+    $pageFile = "pages/{$page}.php";
+    if (file_exists($pageFile)) {
+        include $pageFile;
+        exit;
+    }
+}
+
+if (!$action) {
+    if ($auth->isLoggedIn()) {
+        header("Location: index.php?page=dashboard");
+    } else {
+        header("Location: index.php?page=login");
+    }
+    exit;
+}
 
 $auth->requireLogin();
 header('Content-Type: application/json');
-
-$action = $_GET['action'] ?? '';
-$db = Database::getInstance()->getConnection();
-$faculty_id = $auth->getFacultyId();
 
 function getGradingTemplateClassId($db, $faculty_id) {
     $result = $db->query("SELECT cs.id FROM class_section cs 
