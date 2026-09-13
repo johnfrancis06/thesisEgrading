@@ -1520,12 +1520,203 @@ try {
             generateGradingSheetPdf($class, $gradesData);
         }
     }
+    // Dynamic Grade Category CRUD Endpoints
+    elseif ($action === 'get_grade_templates') {
+        $result = $db->query("SELECT * FROM grade_category_template WHERE is_active = TRUE ORDER BY sort_order");
+        echo ResponseAPI::success($result->fetch_all(MYSQLI_ASSOC));
+    }
+    elseif ($action === 'get_category_configs') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $period = $_GET['period'] ?? 'midterm';
+        
+        $stmt = $db->prepare("
+            SELECT gcc.*, gct.name as template_name, gct.description
+            FROM grade_category_config gcc
+            LEFT JOIN grade_category_template gct ON gcc.template_id = gct.id
+            WHERE gcc.class_section_id = ? AND gcc.period = ?
+            ORDER BY gcc.sort_order
+        ");
+        $stmt->bind_param("is", $classId, $period);
+        $stmt->execute();
+        $configs = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        
+        // Get items for each config
+        foreach ($configs as &$config) {
+            $itemsStmt = $db->prepare("
+                SELECT * FROM grade_item_config 
+                WHERE category_config_id = ? AND is_active = TRUE
+                ORDER BY sort_order
+            ");
+            $itemsStmt->bind_param("i", $config['id']);
+            $itemsStmt->execute();
+            $config['items'] = $itemsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        }
+        
+        echo ResponseAPI::success($configs);
+    }
+    elseif ($action === 'save_category_config') {
+        $data = json_decode(file_get_contents("php://input"), true);
+        $classId = intval($data['class_id'] ?? 0);
+        $period = $data['period'] ?? 'midterm';
+        $configs = $data['configs'] ?? [];
+        
+        if (!$classId) {
+            echo ResponseAPI::error("Invalid class ID");
+            exit;
+        }
+        
+        // Delete existing configs for this class/period (full replace)
+        $stmt = $db->prepare("DELETE FROM grade_category_config WHERE class_section_id = ? AND period = ?");
+        $stmt->bind_param("is", $classId, $period);
+        $stmt->execute();
+        
+        // Insert new configs
+        $sortOrder = 0;
+        foreach ($configs as $config) {
+            $templateId = intval($config['template_id'] ?? 0);
+            $customName = trim($config['custom_name'] ?? '');
+            $weight = floatval($config['weight_percent'] ?? 0);
+            $perfectScore = floatval($config['perfect_score'] ?? 0);
+            $itemCount = intval($config['item_count'] ?? 1);
+            $isVisible = isset($config['is_visible']) ? (bool)$config['is_visible'] : true;
+            $items = $config['items'] ?? [];
+            
+            $stmt = $db->prepare("
+                INSERT INTO grade_category_config (class_section_id, period, template_id, custom_name, weight_percent, perfect_score, item_count, sort_order, is_visible)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->bind_param("isssddiii", $classId, $period, $templateId, $customName, $weight, $perfectScore, $itemCount, $sortOrder, $isVisible);
+            $stmt->execute();
+            
+            $configId = $db->insert_id;
+            
+            // Insert items
+            $itemSort = 0;
+            foreach ($items as $item) {
+                $label = trim($item['label'] ?? '');
+                $maxScore = floatval($item['max_score'] ?? 0);
+                if ($label) {
+                    $itemStmt = $db->prepare("
+                        INSERT INTO grade_item_config (category_config_id, label, max_score, sort_order)
+                        VALUES (?, ?, ?, ?)
+                    ");
+                    $itemStmt->bind_param("isdi", $configId, $label, $maxScore, $itemSort);
+                    $itemStmt->execute();
+                    $itemSort++;
+                }
+            }
+            
+            $sortOrder++;
+        }
+        
+        // Sync to grade_category and grade_item tables
+        syncGradeTables($db, $classId, $period);
+        
+        echo ResponseAPI::success([], "Grade categories saved");
+    }
+    elseif ($action === 'delete_category_config') {
+        $configId = intval($_GET['config_id'] ?? 0);
+        $classId = intval($_GET['class_id'] ?? 0);
+        $period = $_GET['period'] ?? 'midterm';
+        
+        $stmt = $db->prepare("DELETE FROM grade_category_config WHERE id = ? AND class_section_id = ? AND period = ?");
+        $stmt->bind_param("iii", $configId, $classId, $period);
+        $stmt->execute();
+        
+        // Sync to grade_category and grade_item tables
+        syncGradeTables($db, $classId, $period);
+        
+        echo ResponseAPI::success([], "Category deleted");
+    }
+    elseif ($action === 'sync_grade_tables') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $period = $_GET['period'] ?? 'midterm';
+        
+        syncGradeTables($db, $classId, $period);
+        
+        echo ResponseAPI::success([], "Tables synced");
+    }
     else {
         echo ResponseAPI::error("Invalid action", 404);
     }
 } catch (Exception $e) {
     ob_clean();
     echo ResponseAPI::error($e->getMessage(), 500);
+}
+
+// Helper function to sync grade_category and grade_item from configs
+function syncGradeTables($db, $classId, $period) {
+    // Get configs
+    $stmt = $db->prepare("SELECT * FROM grade_category_config WHERE class_section_id = ? AND period = ? ORDER BY sort_order");
+    $stmt->bind_param("is", $classId, $period);
+    $stmt->execute();
+    $configs = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    
+    // For each config, ensure grade_category exists
+    foreach ($configs as $config) {
+        $catStmt = $db->prepare("SELECT id FROM grade_category WHERE config_id = ?");
+        $catStmt->bind_param("i", $config['id']);
+        $catStmt->execute();
+        $catResult = $catStmt->get_result()->fetch_assoc();
+        
+        $categoryName = $config['custom_name'] ?: ($config['template_name'] ?? 'Category');
+        
+        if ($catResult) {
+            $db->query("UPDATE grade_category SET name = '{$db->real_escape_string($categoryName)}', weight_percent = {$config['weight_percent']} WHERE id = {$catResult['id']}");
+            $categoryId = $catResult['id'];
+        } else {
+            $db->query("INSERT INTO grade_category (class_section_id, period, name, weight_percent, config_id, sort_order) VALUES ($classId, '$period', '{$db->real_escape_string($categoryName)}', {$config['weight_percent']}, {$config['id']}, {$config['sort_order']})");
+            $categoryId = $db->insert_id;
+        }
+        
+        // Get items for this config
+        $itemsStmt = $db->prepare("SELECT * FROM grade_item_config WHERE category_config_id = ? AND is_active = TRUE ORDER BY sort_order");
+        $itemsStmt->bind_param("i", $config['id']);
+        $itemsStmt->execute();
+        $items = $itemsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        
+        // Sync items
+        foreach ($items as $item) {
+            $itemStmt = $db->prepare("SELECT id FROM grade_item WHERE item_config_id = ?");
+            $itemStmt->bind_param("i", $item['id']);
+            $itemStmt->execute();
+            $itemResult = $itemStmt->get_result()->fetch_assoc();
+            
+            if ($itemResult) {
+                $db->query("UPDATE grade_item SET label = '{$db->real_escape_string($item['label'])}', max_score = {$item['max_score']} WHERE id = {$itemResult['id']}");
+            } else {
+                $db->query("INSERT INTO grade_item (grade_category_id, label, max_score, item_config_id, sort_order) VALUES ($categoryId, '{$db->real_escape_string($item['label'])}', {$item['max_score']}, {$item['id']}, {$item['sort_order']})");
+            }
+        }
+        
+        // Remove items that no longer exist in config
+        $existingItemConfigIds = array_column($items, 'id');
+        if (!empty($existingItemConfigIds)) {
+            $placeholders = implode(',', array_fill(0, count($existingItemConfigIds), '?'));
+            $types = str_repeat('i', count($existingItemConfigIds));
+            $params = array_merge([$categoryId], $existingItemConfigIds);
+            $stmt = $db->prepare("DELETE FROM grade_item WHERE grade_category_id = ? AND item_config_id NOT IN ($placeholders)");
+            $stmt->bind_param("i$types", ...$params);
+            $stmt->execute();
+        } else {
+            $db->query("DELETE FROM grade_item WHERE grade_category_id = $categoryId");
+        }
+    }
+    
+    // Remove categories that no longer exist in config
+    $existingConfigIds = array_column($configs, 'id');
+    if (!empty($existingConfigIds)) {
+        $placeholders = implode(',', array_fill(0, count($existingConfigIds), '?'));
+        $types = str_repeat('i', count($existingConfigIds));
+        $params = array_merge([$classId, $period], $existingConfigIds);
+        $stmt = $db->prepare("DELETE FROM grade_category WHERE class_section_id = ? AND period = ? AND config_id NOT IN ($placeholders)");
+        $stmt->bind_param("is$types", ...$params);
+        $stmt->execute();
+    } else {
+        $stmt = $db->prepare("DELETE FROM grade_category WHERE class_section_id = ? AND period = ?");
+        $stmt->bind_param("is", $classId, $period);
+        $stmt->execute();
+    }
 }
 
 function generateExcelReport($class, $students) {
@@ -2093,6 +2284,5 @@ function generateGradingSheetPdf($class, $gradesData) {
     echo '</table>';
     echo '</body></html>';
 }
-
 ?>
 

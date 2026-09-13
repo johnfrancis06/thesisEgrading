@@ -307,10 +307,39 @@ if ($classId > 0) {
                      <button type="button" class="btn btn-primary" onclick="saveGradeItem()">Save Item</button>
                  </div>
              </div>
-         </div>
-     </div>
+</div>
+      </div>
 
-     <!-- Perfect Score Modal -->
+      <!-- Category Manager Modal -->
+      <div class="modal fade" id="categoryManagerModal" tabindex="-1">
+          <div class="modal-dialog modal-xl">
+              <div class="modal-content">
+                  <div class="modal-header">
+                      <h5 class="modal-title"><i class="bi bi-gear me-2"></i>Manage Grade Categories - <span id="catMgrPeriodLabel"><?= ucfirst($period) ?></span></h5>
+                      <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                  </div>
+                  <div class="modal-body">
+                      <div class="mb-3">
+                          <button class="btn btn-primary btn-sm" onclick="addCategory()">
+                              <i class="bi bi-plus-circle me-1"></i> Add Category
+                          </button>
+                          <button class="btn btn-outline-secondary btn-sm ms-2" onclick="loadTemplates()">
+                              <i class="bi bi-arrow-clockwise me-1"></i> Load Templates
+                          </button>
+                      </div>
+                      <div id="categoryList" class="row g-3">
+                          <!-- Categories will be loaded here -->
+                      </div>
+                  </div>
+                  <div class="modal-footer">
+                      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                      <button type="button" class="btn btn-primary" onclick="saveCategoryConfig()">Save Configuration</button>
+                  </div>
+              </div>
+          </div>
+      </div>
+
+      <!-- Perfect Score Modal -->
      <div class="modal fade" id="perfectScoreModal" tabindex="-1">
          <div class="modal-dialog">
              <div class="modal-content">
@@ -371,6 +400,307 @@ if ($classId > 0) {
                 loadPerfectScores(classId, newPeriod);
             });
         });
+
+        // Category Manager functions
+        async function showCategoryManager() {
+            document.getElementById('catMgrPeriodLabel').textContent = period.charAt(0).toUpperCase() + period.slice(1);
+            await loadCategoryConfigs();
+            const modal = new bootstrap.Modal(document.getElementById('categoryManagerModal'));
+            modal.show();
+        }
+
+        async function loadCategoryConfigs() {
+            try {
+                const resp = await fetch(`api/index.php?action=get_category_configs&class_id=${classId}&period=${period}`);
+                const data = await resp.json();
+                if (!data.success) return;
+                
+                renderCategoryList(data.data);
+            } catch (e) {
+                console.error('Error loading category configs:', e);
+            }
+        }
+
+        async function loadTemplates() {
+            try {
+                const resp = await fetch('api/index.php?action=get_grade_templates');
+                const data = await resp.json();
+                if (!data.success) return;
+                
+                // Show template selection modal or auto-add
+                const templates = data.data;
+                const container = document.getElementById('categoryList');
+                
+                // Add template options as new category cards
+                for (const template of templates) {
+                    addCategoryFromTemplate(template);
+                }
+            } catch (e) {
+                console.error('Error loading templates:', e);
+            }
+        }
+
+        function addCategory() {
+            addCategoryFromTemplate(null);
+        }
+
+        function addCategoryFromTemplate(template) {
+            const container = document.getElementById('categoryList');
+            const categoryId = 'cat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            const sortOrder = container.children.length;
+            
+            const defaultName = template ? template.name : 'New Category';
+            const defaultWeight = template ? template.default_weight : 0;
+            const defaultMaxScore = template ? template.default_max_score : 100;
+            const defaultItemCount = template && template.name === 'Class Participation' ? (period === 'final' ? 4 : 2) : 1;
+            
+            const cardHtml = `
+                <div class="col-md-6 category-card" data-category-id="${categoryId}" data-template-id="${template ? template.id : ''}">
+                    <div class="card h-100">
+                        <div class="card-header d-flex justify-content-between align-items-center bg-light">
+                            <h6 class="mb-0">${defaultName}</h6>
+                            <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeCategory('${categoryId}')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                        <div class="card-body">
+                            <div class="mb-3">
+                                <label class="form-label">Category Name</label>
+                                <input type="text" class="form-control cat-name" value="${defaultName}" placeholder="Category name">
+                            </div>
+                            <div class="row g-2 mb-3">
+                                <div class="col-md-4">
+                                    <label class="form-label">Weight %</label>
+                                    <input type="number" class="form-control cat-weight" value="${defaultWeight}" step="0.01" min="0" max="100">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Perfect Score</label>
+                                    <input type="number" class="form-control cat-perfect" value="${defaultMaxScore}" step="1" min="1">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label"># Items</label>
+                                    <input type="number" class="form-control cat-item-count" value="${defaultItemCount}" min="1" max="10" onchange="updateItems('${categoryId}', this.value)">
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Items</label>
+                                <div id="items_${categoryId}" class="items-container">
+                                    ${generateItemInputs(categoryId, defaultItemCount, template)}
+                                </div>
+                            </div>
+                            <input type="hidden" class="cat-sort" value="${sortOrder}">
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.insertAdjacentHTML('beforeend', cardHtml);
+        }
+
+        function generateItemInputs(categoryId, count, template) {
+            let html = '';
+            const defaultLabels = template ? getDefaultLabels(template.name, period) : ['Item 1'];
+            const defaultMaxScore = template ? Math.round(template.default_max_score / count) : 10;
+            
+            for (let i = 0; i < count; i++) {
+                const label = defaultLabels[i] || `Item ${i + 1}`;
+                html += `
+                    <div class="row g-2 mb-2 item-row">
+                        <div class="col-md-6">
+                            <input type="text" class="form-control item-label" value="${label}" placeholder="Label (e.g., CP1)">
+                        </div>
+                        <div class="col-md-4">
+                            <input type="number" class="form-control item-max-score" value="${defaultMaxScore}" min="1" step="1" placeholder="Max Score">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="btn btn-outline-danger btn-sm w-100" onclick="removeItem(this)">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+            return html;
+        }
+
+        function getDefaultLabels(templateName, period) {
+            if (templateName === 'Class Participation') {
+                return period === 'final' ? ['CP1', 'CP2', 'CP3', 'CP4'] : ['CP1', 'CP2'];
+            }
+            if (templateName === 'Problem Set') return ['PS1'];
+            if (templateName === 'Quizzes') return ['Q1', 'Q2'];
+            if (templateName === 'Periodical Exam') return ['Exam'];
+            return ['Item 1'];
+        }
+
+        function updateItems(categoryId, count) {
+            const container = document.getElementById(`items_${categoryId}`);
+            const currentCount = container.querySelectorAll('.item-row').length;
+            const newCount = parseInt(count) || 1;
+            
+            if (newCount > currentCount) {
+                // Add more items
+                for (let i = currentCount; i < newCount; i++) {
+                    const div = document.createElement('div');
+                    div.className = 'row g-2 mb-2 item-row';
+                    div.innerHTML = `
+                        <div class="col-md-6">
+                            <input type="text" class="form-control item-label" value="Item ${i + 1}" placeholder="Label (e.g., CP1)">
+                        </div>
+                        <div class="col-md-4">
+                            <input type="number" class="form-control item-max-score" value="10" min="1" step="1" placeholder="Max Score">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="btn btn-outline-danger btn-sm w-100" onclick="removeItem(this)">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    `;
+                    container.appendChild(div);
+                }
+            } else if (newCount < currentCount) {
+                // Remove excess items
+                const items = container.querySelectorAll('.item-row');
+                for (let i = newCount; i < items.length; i++) {
+                    items[i].remove();
+                }
+            }
+        }
+
+        function removeItem(button) {
+            const row = button.closest('.item-row');
+            const container = row.parentElement;
+            row.remove();
+            // Update item count input
+            const categoryCard = button.closest('.category-card');
+            const countInput = categoryCard.querySelector('.cat-item-count');
+            countInput.value = container.querySelectorAll('.item-row').length;
+        }
+
+        function removeCategory(categoryId) {
+            if (confirm('Remove this category and all its items?')) {
+                document.querySelector(`[data-category-id="${categoryId}"]`).remove();
+            }
+        }
+
+        function renderCategoryList(configs) {
+            const container = document.getElementById('categoryList');
+            container.innerHTML = '';
+            
+            configs.forEach((config, idx) => {
+                const categoryId = config.id; // Use actual DB ID
+                const itemsHtml = config.items ? config.items.map(item => `
+                    <div class="row g-2 mb-2 item-row">
+                        <div class="col-md-6">
+                            <input type="text" class="form-control item-label" value="${item.label}" placeholder="Label (e.g., CP1)">
+                        </div>
+                        <div class="col-md-4">
+                            <input type="number" class="form-control item-max-score" value="${item.max_score}" min="1" step="1" placeholder="Max Score">
+                        </div>
+                        <div class="col-md-2">
+                            <button type="button" class="btn btn-outline-danger btn-sm w-100" onclick="removeItem(this)">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `).join('') : '';
+                
+                const cardHtml = `
+                    <div class="col-md-6 category-card" data-category-id="${categoryId}" data-template-id="${config.template_id || ''}" data-db-id="${config.id}">
+                        <div class="card h-100">
+                            <div class="card-header d-flex justify-content-between align-items-center bg-light">
+                                <h6 class="mb-0">${config.custom_name || config.template_name || 'Category'}</h6>
+                                <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeCategory('${categoryId}')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <label class="form-label">Category Name</label>
+                                    <input type="text" class="form-control cat-name" value="${config.custom_name || config.template_name || ''}" placeholder="Category name">
+                                </div>
+                                <div class="row g-2 mb-3">
+                                    <div class="col-md-4">
+                                        <label class="form-label">Weight %</label>
+                                        <input type="number" class="form-control cat-weight" value="${config.weight_percent}" step="0.01" min="0" max="100">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label">Perfect Score</label>
+                                        <input type="number" class="form-control cat-perfect" value="${config.perfect_score}" step="1" min="1">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label"># Items</label>
+                                        <input type="number" class="form-control cat-item-count" value="${config.items ? config.items.length : 1}" min="1" max="10" onchange="updateItems('${categoryId}', this.value)">
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="form-label">Items</label>
+                                    <div id="items_${categoryId}" class="items-container">
+                                        ${itemsHtml}
+                                    </div>
+                                </div>
+                                <input type="hidden" class="cat-sort" value="${idx}">
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', cardHtml);
+            });
+        }
+
+        async function saveCategoryConfig() {
+            const container = document.getElementById('categoryList');
+            const cards = container.querySelectorAll('.category-card');
+            const configs = [];
+            
+            cards.forEach((card, idx) => {
+                const dbId = card.dataset.dbId; // Existing DB ID if editing
+                const templateId = card.dataset.templateId;
+                
+                const items = [];
+                card.querySelectorAll('.item-row').forEach(row => {
+                    const label = row.querySelector('.item-label').value;
+                    const maxScore = parseFloat(row.querySelector('.item-max-score').value) || 0;
+                    if (label) {
+                        items.push({ label, max_score: maxScore });
+                    }
+                });
+                
+                configs.push({
+                    id: dbId ? parseInt(dbId) : null, // Include existing ID for update
+                    template_id: templateId ? parseInt(templateId) : null,
+                    custom_name: card.querySelector('.cat-name').value,
+                    weight_percent: parseFloat(card.querySelector('.cat-weight').value) || 0,
+                    perfect_score: parseFloat(card.querySelector('.cat-perfect').value) || 0,
+                    item_count: items.length,
+                    sort_order: idx,
+                    is_visible: true,
+                    items: items
+                });
+            });
+            
+            try {
+                const resp = await fetch('api/index.php?action=save_category_config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        class_id: classId,
+                        period: period,
+                        configs: configs
+                    })
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    alert('Category configuration saved!');
+                    bootstrap.Modal.getInstance(document.getElementById('categoryManagerModal')).hide();
+                    loadGradingSheet(classId, period);
+                    loadPerfectScores(classId, period);
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
 
         // Editable weight functionality
         document.querySelectorAll('.weight-editable').forEach(badge => {

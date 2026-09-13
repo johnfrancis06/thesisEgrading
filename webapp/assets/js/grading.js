@@ -2,7 +2,9 @@
 
 async function loadGradingSheet(classId, period) {
     try {
-        const resp = await fetch(`api/index.php?action=get_class_grades&class_id=${classId}`);
+        const resp = await fetch(`api/index.php?action=get_class_grades&class_id=${classId}`, {
+            credentials: 'include'
+        });
         const data = await resp.json();
         if (!data.success) {
             console.error('API Error:', data.message);
@@ -18,7 +20,9 @@ async function loadGradingSheet(classId, period) {
 
 async function loadPerfectScores(classId, period) {
     try {
-        const resp = await fetch(`api/index.php?action=get_component_perfect_scores&class_id=${classId}&period=${period}`);
+        const resp = await fetch(`api/index.php?action=get_component_perfect_scores&class_id=${classId}&period=${period}`, {
+            credentials: 'include'
+        });
         const data = await resp.json();
         if (!data.success) return;
         
@@ -48,9 +52,10 @@ async function savePerfectScores() {
     };
     
     try {
-        const resp = await fetch('api/index.php?action=save_component_perfect_scores', {
+        const resp = await fetch(`api/index.php?action=save_component_perfect_scores`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ class_id: classId, period, scores })
         });
         const data = await resp.json();
@@ -88,7 +93,7 @@ function showPerfectScoreModal() {
     modal.show();
 }
 
-function renderGradingTable(data, classId, period) {
+async function renderGradingTable(data, classId, period) {
     const table = document.getElementById('gradingTable');
     const thead = document.getElementById('gradingHead');
     const tbody = document.getElementById('gradingBody');
@@ -101,277 +106,236 @@ function renderGradingTable(data, classId, period) {
     const gradesData = data.grades;
     const classInfo = data.class;
     
-    // Define column structure for the period
-    // Midterm: CP1, CP2 | PS1 | Q1, Q2 | Exam
-    // Final:   CP1, CP2, CP3, CP4 | PS1 | Q1, Q2 | Exam
-    const cpCount = period === 'midterm' ? 2 : 4;
-    const psCount = 1;
-    const quizCount = 2;
-    const examCount = 1;
-    
-    // Perfect scores from DB
-    const perfectScores = {
-        class_participation: parseFloat(document.querySelector('.perfect-score-input[data-component="class_participation"]')?.value || '0'),
-        problem_set: parseFloat(document.querySelector('.perfect-score-input[data-component="problem_set"]')?.value || '0'),
-        quizzes: parseFloat(document.querySelector('.perfect-score-input[data-component="quizzes"]')?.value || '0'),
-        periodical_exam: parseFloat(document.querySelector('.perfect-score-input[data-component="periodical_exam"]')?.value || '0')
-    };
-    
-    // Build 3-row header
-    let headerHTML = '';
-    
-    // Row 1: Main category spans
-    headerHTML += '<tr class="header-row1">';
-    headerHTML += '<th rowspan="3" class="col-student">Name of Students</th>';
-    
-    // CLASS STANDING (spans CP + PS)
-    const classStandingCols = (cpCount + 2) + (psCount + 2); // CP items + total + equiv + PS items + total + equiv
-    headerHTML += `<th colspan="${classStandingCols}" class="header-main">CLASS STANDING</th>`;
-    
-    // QUIZZES
-    const quizCols = quizCount + 2; // Q items + total + equiv
-    headerHTML += `<th colspan="${quizCols}" class="header-main">QUIZZES</th>`;
-    
-    // PERIODICAL EXAM
-    const examCols = examCount + 2; // Score + equiv + weight
-    headerHTML += `<th colspan="${examCols}" class="header-main">PERIODICAL EXAM</th>`;
-    
-    // MIDTERM GRADE, Round off, REMARKS (each spans 3 rows)
-    headerHTML += '<th rowspan="3" class="header-main header-midterm">MIDTERM GRADE</th>';
-    headerHTML += '<th rowspan="3" class="header-main header-roundoff">Round off</th>';
-    headerHTML += '<th rowspan="3" class="header-main header-remarks">REMARKS</th>';
-    headerHTML += '</tr>';
-    
-    // Row 2: Sub-groups (Class Participation | Problem Set)
-    headerHTML += '<tr class="header-row2">';
-    headerHTML += `<th colspan="${cpCount + 2}" class="header-sub">Class Participation</th>`;
-    headerHTML += `<th colspan="${psCount + 2}" class="header-sub">Problem Set</th>`;
-    // Quizzes and Periodical Exam don't have sub-groups, so skip
-    headerHTML += '</tr>';
-    
-    // Row 3: Column labels
-    headerHTML += '<tr class="header-row3">';
-    
-    // Class Participation columns
-    for (let i = 1; i <= cpCount; i++) {
-        headerHTML += `<th class="header-col header-raw">CP${i}</th>`;
+    // Fetch dynamic category configs
+    const configs = await fetchCategoryConfigs(classId, period);
+    if (!configs || configs.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="50" class="text-center">No categories configured. Click "Manage Categories" to set up.</td></tr>`;
+        return;
     }
-    headerHTML += `<th class="header-col header-total">Total</th>`;
-    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
-    headerHTML += `<th class="header-col header-weight">20%</th>`;
     
-    // Problem Set columns
-    for (let i = 1; i <= psCount; i++) {
-        headerHTML += `<th class="header-col header-raw">PS${i}</th>`;
-    }
-    headerHTML += `<th class="header-col header-total">Total</th>`;
-    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
-    headerHTML += `<th class="header-col header-weight">20%</th>`;
+    // Store configs globally for use in calculations
+    window.currentCategoryConfigs = configs;
     
-    // Quizzes columns
-    for (let i = 1; i <= quizCount; i++) {
-        headerHTML += `<th class="header-col header-raw">Q${i}</th>`;
-    }
-    headerHTML += `<th class="header-col header-total">Total</th>`;
-    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
-    headerHTML += `<th class="header-col header-weight">30%</th>`;
+    // Build perfect scores object from configs
+    const perfectScores = {};
+    configs.forEach(config => {
+        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        perfectScores[key] = config.perfect_score;
+    });
     
-    // Periodical Exam columns
-    headerHTML += `<th class="header-col header-raw">Score</th>`;
-    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
-    headerHTML += `<th class="header-col header-weight">30%</th>`;
+    // Store perfect scores globally
+    window.currentPerfectScores = perfectScores;
     
-    headerHTML += '</tr>';
+    // Update perfect score display inputs
+    updatePerfectScoreDisplay(perfectScores);
     
-    thead.innerHTML = headerHTML;
+    // Build dynamic header
+    buildDynamicHeader(configs);
     
     // Build body rows
     let bodyHTML = '';
     
     // Perfect Score Reference Row
-    bodyHTML += '<tr class="perfect-score-row">';
-    bodyHTML += '<td class="col-student"><strong>Perfect Score</strong></td>';
-    
-    // CP items
-    for (let i = 1; i <= cpCount; i++) {
-        const maxPerItem = cpCount > 0 ? Math.round(perfectScores.class_participation / cpCount) : 0;
-        bodyHTML += `<td class="cell-raw perfect-cell">${maxPerItem}</td>`;
-    }
-    bodyHTML += `<td class="cell-total perfect-cell">${perfectScores.class_participation || ''}</td>`;
-    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
-    bodyHTML += `<td class="cell-weight perfect-cell">20%</td>`;
-    
-    // PS items
-    for (let i = 1; i <= psCount; i++) {
-        bodyHTML += `<td class="cell-raw perfect-cell">${perfectScores.problem_set || ''}</td>`;
-    }
-    bodyHTML += `<td class="cell-total perfect-cell">${perfectScores.problem_set || ''}</td>`;
-    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
-    bodyHTML += `<td class="cell-weight perfect-cell">20%</td>`;
-    
-    // Quiz items
-    for (let i = 1; i <= quizCount; i++) {
-        const maxPerItem = quizCount > 0 ? Math.round(perfectScores.quizzes / quizCount) : 0;
-        bodyHTML += `<td class="cell-raw perfect-cell">${maxPerItem}</td>`;
-    }
-    bodyHTML += `<td class="cell-total perfect-cell">${perfectScores.quizzes || ''}</td>`;
-    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
-    bodyHTML += `<td class="cell-weight perfect-cell">30%</td>`;
-    
-    // Exam
-    bodyHTML += `<td class="cell-raw perfect-cell">${perfectScores.periodical_exam || ''}</td>`;
-    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
-    bodyHTML += `<td class="cell-weight perfect-cell">30%</td>`;
-    
-    // Summary columns for perfect score row
-    bodyHTML += `<td class="cell-midterm perfect-cell"></td>`;
-    bodyHTML += `<td class="cell-roundoff perfect-cell"></td>`;
-    bodyHTML += `<td class="cell-remarks perfect-cell"></td>`;
-    bodyHTML += '</tr>';
+    bodyHTML += buildPerfectScoreRow(configs);
     
     // Student rows
     gradesData.forEach(student => {
-        const midterm = student['midterm'] || { grade: 0, grade_point: 5.00, remarks: 'INC', components: {} };
-        const final = student['final'] || { grade: 0, grade_point: 5.00, remarks: 'INC', components: {} };
-        const overall = student['overall'] || { grade: 0, grade_point: 5.00, remarks: 'INC' };
-        
-        const periodData = period === 'midterm' ? midterm : final;
-        const periodGrade = periodData.grade;
-        const periodGradePoint = periodData.grade_point;
-        const periodRemarks = periodData.remarks;
-        const componentsData = periodData.components || {};
-        
-        bodyHTML += `<tr data-student="${student.id}">`;
-        bodyHTML += `<td class="col-student">${student.last_name}, ${student.first_name} ${student.middle_initial || ''}.</td>`;
-        
-        // Helper to get component data
-        const getCompData = (compKey) => componentsData[compKey] || { items: [], raw_total: 0, max_total: 0, perfect_score: 0 };
-        
-        // CLASS PARTICIPATION
-        const cpData = getCompData('class_participation');
-        const cpItems = cpData.items || [];
-        const cpRawTotal = cpData.raw_total || 0;
-        const cpPerfectScore = perfectScores.class_participation || cpData.perfect_score || cpData.max_total || 0;
-        const cpEquiv = cpPerfectScore > 0 ? transmute(cpRawTotal, cpPerfectScore) : 0;
-        const cpWeighted = cpEquiv * 0.20;
-        
-        for (let i = 1; i <= cpCount; i++) {
-            const item = cpItems[i-1] || { raw_score: '', max_score: 0, item_id: null };
-            const score = item.raw_score !== undefined && item.raw_score !== null ? item.raw_score : '';
-            const maxScore = item.max_score || (cpCount > 0 ? Math.round(cpPerfectScore / cpCount) : 0);
-            bodyHTML += `<td class="cell-raw">
-                <input type="number" class="grade-input" 
-                       data-item="${item.item_id || 'new'}" data-student="${student.id}" 
-                       data-max="${maxScore}" data-component="class_participation" 
-                       data-sub-idx="${i-1}"
-                       value="${score !== '' ? score : ''}" 
-                       step="1" min="0" max="${maxScore}"
-                       oninput="onGradeInput(this, ${student.id}, 'class_participation', ${i-1})"
-                       style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
-            </td>`;
-        }
-        bodyHTML += `<td class="cell-total cell-readonly">${cpRawTotal > 0 ? cpRawTotal : ''}</td>`;
-        bodyHTML += `<td class="cell-equiv cell-readonly">${cpRawTotal > 0 ? cpEquiv.toFixed(2) : ''}</td>`;
-        bodyHTML += `<td class="cell-weight cell-readonly">20%</td>`;
-        
-        // PROBLEM SET
-        const psData = getCompData('problem_set');
-        const psItems = psData.items || [];
-        const psRawTotal = psData.raw_total || 0;
-        const psPerfectScore = perfectScores.problem_set || psData.perfect_score || psData.max_total || 0;
-        const psEquiv = psPerfectScore > 0 ? transmute(psRawTotal, psPerfectScore) : 0;
-        const psWeighted = psEquiv * 0.20;
-        
-        for (let i = 1; i <= psCount; i++) {
-            const item = psItems[i-1] || { raw_score: '', max_score: 0, item_id: null };
-            const score = item.raw_score !== undefined && item.raw_score !== null ? item.raw_score : '';
-            const maxScore = item.max_score || psPerfectScore;
-            bodyHTML += `<td class="cell-raw">
-                <input type="number" class="grade-input" 
-                       data-item="${item.item_id || 'new'}" data-student="${student.id}" 
-                       data-max="${maxScore}" data-component="problem_set" 
-                       data-sub-idx="${i-1}"
-                       value="${score !== '' ? score : ''}" 
-                       step="1" min="0" max="${maxScore}"
-                       oninput="onGradeInput(this, ${student.id}, 'problem_set', ${i-1})"
-                       style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
-            </td>`;
-        }
-        bodyHTML += `<td class="cell-total cell-readonly">${psRawTotal > 0 ? psRawTotal : ''}</td>`;
-        bodyHTML += `<td class="cell-equiv cell-readonly">${psRawTotal > 0 ? psEquiv.toFixed(2) : ''}</td>`;
-        bodyHTML += `<td class="cell-weight cell-readonly">20%</td>`;
-        
-        // QUIZZES
-        const quizData = getCompData('quizzes');
-        const quizItems = quizData.items || [];
-        const quizRawTotal = quizData.raw_total || 0;
-        const quizPerfectScore = perfectScores.quizzes || quizData.perfect_score || quizData.max_total || 0;
-        const quizEquiv = quizPerfectScore > 0 ? transmute(quizRawTotal, quizPerfectScore) : 0;
-        const quizWeighted = quizEquiv * 0.30;
-        
-        for (let i = 1; i <= quizCount; i++) {
-            const item = quizItems[i-1] || { raw_score: '', max_score: 0, item_id: null };
-            const score = item.raw_score !== undefined && item.raw_score !== null ? item.raw_score : '';
-            const maxScore = item.max_score || (quizCount > 0 ? Math.round(quizPerfectScore / quizCount) : 0);
-            bodyHTML += `<td class="cell-raw">
-                <input type="number" class="grade-input" 
-                       data-item="${item.item_id || 'new'}" data-student="${student.id}" 
-                       data-max="${maxScore}" data-component="quizzes" 
-                       data-sub-idx="${i-1}"
-                       value="${score !== '' ? score : ''}" 
-                       step="1" min="0" max="${maxScore}"
-                       oninput="onGradeInput(this, ${student.id}, 'quizzes', ${i-1})"
-                       style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
-            </td>`;
-        }
-        bodyHTML += `<td class="cell-total cell-readonly">${quizRawTotal > 0 ? quizRawTotal : ''}</td>`;
-        bodyHTML += `<td class="cell-equiv cell-readonly">${quizRawTotal > 0 ? quizEquiv.toFixed(2) : ''}</td>`;
-        bodyHTML += `<td class="cell-weight cell-readonly">30%</td>`;
-        
-        // PERIODICAL EXAM
-        const examData = getCompData('periodical_exam');
-        const examItems = examData.items || [];
-        const examRawTotal = examData.raw_total || 0;
-        const examPerfectScore = perfectScores.periodical_exam || examData.perfect_score || examData.max_total || 0;
-        const examEquiv = examPerfectScore > 0 ? transmute(examRawTotal, examPerfectScore) : 0;
-        const examWeighted = examEquiv * 0.30;
-        
-        const examItem = examItems[0] || { raw_score: '', max_score: 0, item_id: null };
-        const examScore = examItem.raw_score !== undefined && examItem.raw_score !== null ? examItem.raw_score : '';
-        const examMaxScore = examItem.max_score || examPerfectScore;
-        bodyHTML += `<td class="cell-raw">
-            <input type="number" class="grade-input" 
-                   data-item="${examItem.item_id || 'new'}" data-student="${student.id}" 
-                   data-max="${examMaxScore}" data-component="periodical_exam" 
-                   data-sub-idx="0"
-                   value="${examScore !== '' ? examScore : ''}" 
-                   step="1" min="0" max="${examMaxScore}"
-                   oninput="onGradeInput(this, ${student.id}, 'periodical_exam', 0)"
-                   style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
-        </td>`;
-        bodyHTML += `<td class="cell-equiv cell-readonly">${examRawTotal > 0 ? examEquiv.toFixed(2) : ''}</td>`;
-        bodyHTML += `<td class="cell-weight cell-readonly">30%</td>`;
-        
-        // MIDTERM GRADE (weighted sum)
-        const totalWeighted = cpWeighted + psWeighted + quizWeighted + examWeighted;
-        bodyHTML += `<td class="cell-midterm cell-readonly">${totalWeighted > 0 ? totalWeighted.toFixed(2) : ''}</td>`;
-        
-        // Round off
-        bodyHTML += `<td class="cell-roundoff cell-readonly">${totalWeighted > 0 ? Math.round(totalWeighted) : ''}</td>`;
-        
-        // Remarks
-        const remarks = totalWeighted >= 75 ? 'Passed' : (totalWeighted > 0 ? 'Failed' : 'INC');
-        bodyHTML += `<td class="cell-remarks cell-readonly">${remarks}</td>`;
-        
-        bodyHTML += '</tr>';
+        bodyHTML += buildStudentRow(student, configs, period);
     });
     
     tbody.innerHTML = bodyHTML || `<tr><td colspan="50" class="text-center">No data</td></tr>`;
     
-    // Attach hover handlers for non-colored cells
+    // Attach hover handlers
     attachRowHoverEffects();
+    
+    // Calculate initial grades for all students
+    gradesData.forEach(student => {
+        calculateRowGrades(student.id);
+    });
 }
 
+async function fetchCategoryConfigs(classId, period) {
+    try {
+        const resp = await fetch(`api/index.php?action=get_category_configs&class_id=${classId}&period=${period}`, {
+            credentials: 'include'
+        });
+        const data = await resp.json();
+        if (data.success) return data.data;
+        return [];
+    } catch (e) {
+        console.error('Error fetching category configs:', e);
+        return [];
+    }
+}
+
+function getComponentKeyFromTemplate(templateId) {
+    // Map template IDs to component keys for backward compatibility
+    const templateMap = {
+        1: 'class_participation',
+        2: 'problem_set',
+        3: 'quizzes',
+        4: 'periodical_exam'
+    };
+    return templateMap[templateId] || `custom_${templateId}`;
+}
+
+function updatePerfectScoreDisplay(perfectScores) {
+    document.querySelectorAll('.perfect-score-input').forEach(input => {
+        const component = input.dataset.component;
+        if (perfectScores[component] !== undefined) {
+            input.value = perfectScores[component];
+        }
+    });
+}
+
+function buildDynamicHeader(configs) {
+    const thead = document.getElementById('gradingHead');
+    let headerHTML = '';
+    
+    // Calculate total columns for span calculations
+    let totalItemCols = 0;
+    configs.forEach(config => {
+        totalItemCols += (config.items ? config.items.length : 1) + 2; // items + total + equiv + weight
+    });
+    
+    // Row 1: Main category spans
+    headerHTML += '<tr class="header-row1">';
+    headerHTML += '<th rowspan="3" class="col-student">Name of Students</th>';
+    
+    configs.forEach(config => {
+        const itemCount = config.items ? config.items.length : 1;
+        const colSpan = itemCount + 3; // items + total + equiv + weight
+        headerHTML += `<th colspan="${colSpan}" class="header-main">${config.custom_name || config.template_name || 'Category'}</th>`;
+    });
+    
+    // MIDTERM GRADE, Round off, REMARKS
+    headerHTML += '<th rowspan="3" class="header-main header-midterm">MIDTERM GRADE</th>';
+    headerHTML += '<th rowspan="3" class="header-main header-roundoff">Round off</th>';
+    headerHTML += '<th rowspan="3" class="header-main header-remarks">REMARKS</th>';
+    headerHTML += '</tr>';
+    
+    // Row 2: Only add if there are multiple items per category (sub-groups)
+    // For simplicity, we'll skip row 2 or make it conditional
+    // Actually, the original design had CLASS STANDING spanning CP + PS
+    // We'll keep it simple: each category is its own group
+    // So no row 2 needed for dynamic structure
+    
+    // Row 3: Column labels
+    headerHTML += '<tr class="header-row3">';
+    
+    configs.forEach(config => {
+        const items = config.items || [];
+        const weight = config.weight_percent;
+        const maxWeight = weight;
+        
+        items.forEach(item => {
+            headerHTML += `<th class="header-col header-raw">${item.label}</th>`;
+        });
+        
+        // Total, Equiv, Weight
+        headerHTML += `<th class="header-col header-total">Total</th>`;
+        headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
+        headerHTML += `<th class="header-col header-weight"><span data-max-weight="${maxWeight}">${maxWeight}%</span></th>`;
+    });
+    
+    headerHTML += '</tr>';
+    
+    thead.innerHTML = headerHTML;
+}
+
+function buildPerfectScoreRow(configs) {
+    let html = '<tr class="perfect-score-row">';
+    html += '<td class="col-student"><strong>Perfect Score</strong></td>';
+    
+    configs.forEach(config => {
+        const items = config.items || [];
+        const perfectScore = config.perfect_score;
+        const weight = config.weight_percent;
+        const itemCount = items.length;
+        const maxPerItem = itemCount > 0 ? Math.round(perfectScore / itemCount) : 0;
+        
+        items.forEach(() => {
+            html += `<td class="cell-raw perfect-cell">${maxPerItem}</td>`;
+        });
+        
+        html += `<td class="cell-total perfect-cell">${perfectScore || ''}</td>`;
+        html += `<td class="cell-equiv perfect-cell"></td>`;
+        html += `<td class="cell-weight perfect-cell"><input type="number" class="weight-input" data-component="${getComponentKeyFromTemplate(config.template_id)}" data-max-weight="${weight}" value="${weight}" readonly style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: #FF0000; color: #FFF;"></td>`;
+    });
+    
+    // Summary columns
+    html += `<td class="cell-midterm perfect-cell"></td>`;
+    html += `<td class="cell-roundoff perfect-cell"></td>`;
+    html += `<td class="cell-remarks perfect-cell"></td>`;
+    html += '</tr>';
+    
+    return html;
+}
+
+function buildStudentRow(student, configs, period) {
+    const periodData = period === 'midterm' ? (student.midterm || {}) : (student.final || {});
+    const componentsData = periodData.components || {};
+    
+    let html = `<tr data-student="${student.id}">`;
+    html += `<td class="col-student">${student.last_name}, ${student.first_name} ${student.middle_initial || ''}.</td>`;
+    
+    configs.forEach(config => {
+        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const compData = componentsData[key] || { items: [], raw_total: 0, max_total: 0, perfect_score: 0 };
+        const items = config.items || [];
+        const perfectScore = config.perfect_score;
+        const weight = config.weight_percent;
+        const itemCount = items.length;
+        
+        // Render item inputs
+        items.forEach((item, idx) => {
+            const itemData = compData.items[idx] || { raw_score: '', max_score: 0, item_id: null };
+            const score = itemData.raw_score !== undefined && itemData.raw_score !== null ? itemData.raw_score : '';
+            const maxScore = itemData.max_score || item.max_score || maxPerItem;
+            
+            html += `<td class="cell-raw">
+                <input type="number" class="grade-input" 
+                       data-item="${itemData.item_id || 'new'}" data-student="${student.id}" 
+                       data-max="${maxScore}" data-component="${key}" 
+                       data-sub-idx="${idx}"
+                       value="${score !== '' ? score : ''}" 
+                       step="1" min="0" max="${maxScore}"
+                       oninput="onGradeInput(this, ${student.id}, '${key}', ${idx})"
+                       style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
+            </td>`;
+        });
+        
+        const rawTotal = compData.raw_total || 0;
+        const equivScore = perfectScore > 0 ? transmute(rawTotal, perfectScore) : 0;
+        const autoWeight = equivScore > 0 ? (equivScore / 100) * weight : 0;
+        
+        html += `<td class="cell-total cell-readonly">${rawTotal > 0 ? rawTotal : ''}</td>`;
+        html += `<td class="cell-equiv cell-readonly">${rawTotal > 0 ? equivScore.toFixed(2) : ''}</td>`;
+        html += `<td class="cell-weight"><input type="number" class="weight-input" data-student="${student.id}" data-component="${key}" data-max-weight="${weight}" value="${rawTotal > 0 ? autoWeight.toFixed(2) : ''}" step="0.01" min="0" max="${weight}" oninput="onWeightInput(this, ${student.id}, '${key}')" style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: #FF0000; color: #FFF;"></td>`;
+    });
+    
+    // Calculate initial weighted total for display
+    let totalWeighted = 0;
+    configs.forEach(config => {
+        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const compData = componentsData[key] || { raw_total: 0 };
+        const perfectScore = config.perfect_score;
+        const weight = config.weight_percent;
+        const rawTotal = compData.raw_total || 0;
+        const equivScore = perfectScore > 0 ? transmute(rawTotal, perfectScore) : 0;
+        totalWeighted += equivScore * (weight / 100);
+    });
+    
+    const remarks = totalWeighted >= 75 ? 'Passed' : (totalWeighted > 0 ? 'Failed' : 'INC');
+    
+    html += `<td class="cell-midterm cell-readonly">${totalWeighted > 0 ? totalWeighted.toFixed(2) : ''}</td>`;
+    html += `<td class="cell-roundoff cell-readonly">${totalWeighted > 0 ? Math.round(totalWeighted) : ''}</td>`;
+    html += `<td class="cell-remarks cell-readonly">${remarks}</td>`;
+    
+    html += '</tr>';
+return html;
+}
+     
 const saveTimers = {};
 
 function onGradeInput(input, studentId, componentKey, subIdx) {
@@ -381,7 +345,19 @@ function onGradeInput(input, studentId, componentKey, subIdx) {
     clamped = Math.round(clamped);
     input.value = clamped;
     
+    // Clear manual edit flag for this component so weight recalculates
+    const row = document.querySelector(`tr[data-student="${studentId}"]`);
+    if (row) {
+        const weightInput = row.querySelector(`input.weight-input[data-component="${componentKey}"]`);
+        if (weightInput) {
+            delete weightInput.dataset.manuallyEdited;
+        }
+    }
+    
     calculateRowGrades(studentId);
+    
+    // Auto-update weight input based on new equivalent
+    updateWeightFromEquiv(studentId, componentKey);
     
     const gradeItemId = input.dataset.item;
     const studentKey = `${studentId}_${componentKey}_${subIdx}`;
@@ -397,6 +373,7 @@ function onGradeInput(input, studentId, componentKey, subIdx) {
                 const resp = await fetch('api/index.php?action=save_grade', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({ 
                         grade_item_id: parseInt(gradeItemId), 
                         student_id: studentId, 
@@ -414,92 +391,160 @@ function onGradeInput(input, studentId, componentKey, subIdx) {
     }
 }
 
-function calculateRowGrades(studentId) {
-    // Get perfect scores from display
-    const perfectScores = {
-        class_participation: parseFloat(document.querySelector('.perfect-score-input[data-component="class_participation"]')?.value || '0'),
-        problem_set: parseFloat(document.querySelector('.perfect-score-input[data-component="problem_set"]')?.value || '0'),
-        quizzes: parseFloat(document.querySelector('.perfect-score-input[data-component="quizzes"]')?.value || '0'),
-        periodical_exam: parseFloat(document.querySelector('.perfect-score-input[data-component="periodical_exam"]')?.value || '0')
-    };
+function onWeightInput(input, studentId, componentKey) {
+    // Clamp weight to max
+    const maxWeight = parseFloat(input.dataset.maxWeight) || 30;
+    let clamped = Math.min(Math.max(parseFloat(input.value) || 0, 0), maxWeight);
+    clamped = parseFloat(clamped.toFixed(2));
+    input.value = clamped;
     
-    const components = [
-        { key: 'class_participation', weight: 0.20 },
-        { key: 'problem_set', weight: 0.20 },
-        { key: 'quizzes', weight: 0.30 },
-        { key: 'periodical_exam', weight: 0.30 }
-    ];
+    // Mark as manually edited so auto-calc doesn't override
+    input.dataset.manuallyEdited = 'true';
+    
+    calculateRowGrades(studentId);
+}
+
+function updateWeightFromEquiv(studentId, componentKey) {
+    const row = document.querySelector(`tr[data-student="${studentId}"]`);
+    if (!row) return;
+    
+    const equivCells = row.querySelectorAll('.cell-equiv.cell-readonly');
+    const configs = window.currentCategoryConfigs || [];
+    
+    let compIdx = -1;
+    let maxWeight = 30;
+    
+    if (configs.length > 0) {
+        configs.forEach((config, idx) => {
+            const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+            if (key === componentKey) {
+                compIdx = idx;
+                maxWeight = config.weight_percent;
+            }
+        });
+    } else {
+        // Fallback
+        const compOrder = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
+        compIdx = compOrder.indexOf(componentKey);
+        const maxWeights = {
+            'class_participation': 20,
+            'problem_set': 20,
+            'quizzes': 30,
+            'periodical_exam': 30
+        };
+        maxWeight = maxWeights[componentKey] || 30;
+    }
+    
+    if (compIdx >= 0 && equivCells[compIdx]) {
+        const equivText = equivCells[compIdx].textContent;
+        const equiv = parseFloat(equivText) || 0;
+        
+        const autoWeight = equiv > 0 ? (equiv / 100) * maxWeight : 0;
+        
+        const weightInput = row.querySelector(`input.weight-input[data-component="${componentKey}"]`);
+        if (weightInput && !weightInput.dataset.manuallyEdited) {
+            weightInput.value = autoWeight.toFixed(2);
+        }
+    }
+}
+
+function calculateRowGrades(studentId) {
+    // Get perfect scores from global (set by renderGradingTable)
+    const perfectScores = window.currentPerfectScores || {};
+    const configs = window.currentCategoryConfigs || [];
+    
+    if (configs.length === 0) return;
     
     let allWeightedScores = {};
     
-    components.forEach(comp => {
+    configs.forEach(config => {
+        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const weight = config.weight_percent;
+        const perfectScore = perfectScores[key] || config.perfect_score || 100;
+        
         let total = 0;
         
-        const inputs = document.querySelectorAll(`input[data-student="${studentId}"][data-component="${comp.key}"]`);
+        const inputs = document.querySelectorAll(`input.grade-input[data-student="${studentId}"][data-component="${key}"]`);
         inputs.forEach(input => {
             const score = parseFloat(input.value) || 0;
             total += score;
         });
         
-        const perfectScore = perfectScores[comp.key] || 100;
         const equivScore = perfectScore > 0 ? transmute(total, perfectScore) : 0;
-        const weighted = equivScore * comp.weight;
         
-        allWeightedScores[comp.key] = { total, equiv: equivScore, weighted };
+        // Read weight from input (editable by teacher)
+        const weightInput = document.querySelector(`input.weight-input[data-student="${studentId}"][data-component="${key}"]`);
+        let weight = weightInput ? parseFloat(weightInput.value) || 0 : weight;
+        weight = weight / 100; // Convert percentage to decimal
+        
+        const weighted = equivScore * weight;
+        
+        allWeightedScores[key] = { total, equiv: equivScore, weighted, weight: weight * 100 };
     });
     
-    // Calculate period grade (weighted average)
+    // Calculate period grade (sum of weighted scores)
     let periodGrade = 0;
-    components.forEach(comp => {
-        periodGrade += (allWeightedScores[comp.key]?.weighted || 0);
+    Object.values(allWeightedScores).forEach(data => {
+        periodGrade += (data.weighted || 0);
     });
     
     // Update all computed cells for this student
-    updateComputedCells(studentId, allWeightedScores, periodGrade);
+    updateComputedCells(studentId, allWeightedScores, periodGrade, configs);
 }
 
-function updateComputedCells(studentId, allWeightedScores, periodGrade) {
+function updateComputedCells(studentId, allWeightedScores, periodGrade, configs) {
     const row = document.querySelector(`tr[data-student="${studentId}"]`);
     if (!row) return;
     
-    // Get all cells in this row (skip the first cell which is student name)
-    const cells = row.querySelectorAll('td');
-    // We need to find specific cells by their class
-    
-    const compOrder = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
-    
-    compOrder.forEach((compKey, idx) => {
-        const data = allWeightedScores[compKey];
-        if (!data) return;
-        
-        // Find total cell (first cell with class cell-total.cell-readonly for this component)
-        // The structure is: raw inputs, then total, then equiv, then weight
-        // We'll find them by looking at the cell classes
-    });
-    
-    // Better: use querySelectorAll with specific class combinations
     const totalCells = row.querySelectorAll('.cell-total.cell-readonly');
     const equivCells = row.querySelectorAll('.cell-equiv.cell-readonly');
-    const weightCells = row.querySelectorAll('.cell-weight.cell-readonly');
+    const weightInputs = row.querySelectorAll('input.weight-input');
     const midtermCell = row.querySelector('.cell-midterm.cell-readonly');
     const roundoffCell = row.querySelector('.cell-roundoff.cell-readonly');
     const remarksCell = row.querySelector('.cell-remarks.cell-readonly');
     
-    // The order matches compOrder: CP, PS, Quiz, Exam
-    compOrder.forEach((compKey, idx) => {
-        const data = allWeightedScores[compKey];
-        if (!data) return;
-        
-        // Total cell
-        if (totalCells[idx]) {
-            totalCells[idx].textContent = data.total > 0 ? data.total : '';
-        }
-        
-        // Equiv cell
-        if (equivCells[idx]) {
-            equivCells[idx].textContent = data.total > 0 ? data.equiv.toFixed(2) : '';
-        }
-    });
+    // Use configs order instead of hardcoded compOrder
+    if (configs && configs.length > 0) {
+        configs.forEach((config, idx) => {
+            const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+            const data = allWeightedScores[key];
+            if (!data) return;
+            
+            // Total cell
+            if (totalCells[idx]) {
+                totalCells[idx].textContent = data.total > 0 ? data.total : '';
+            }
+            
+            // Equiv cell
+            if (equivCells[idx]) {
+                equivCells[idx].textContent = data.total > 0 ? data.equiv.toFixed(2) : '';
+            }
+            
+            // Weight input - update if not manually edited
+            if (weightInputs[idx]) {
+                const input = weightInputs[idx];
+                if (!input.dataset.manuallyEdited) {
+                    input.value = data.weight > 0 ? data.weight.toFixed(2) : '';
+                }
+            }
+        });
+    } else {
+        // Fallback to old behavior
+        const compOrder = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
+        compOrder.forEach((compKey, idx) => {
+            const data = allWeightedScores[compKey];
+            if (!data) return;
+            
+            if (totalCells[idx]) totalCells[idx].textContent = data.total > 0 ? data.total : '';
+            if (equivCells[idx]) equivCells[idx].textContent = data.total > 0 ? data.equiv.toFixed(2) : '';
+            if (weightInputs[idx]) {
+                const input = weightInputs[idx];
+                if (!input.dataset.manuallyEdited) {
+                    input.value = data.weight > 0 ? data.weight.toFixed(2) : '';
+                }
+            }
+        });
+    }
     
     // Midterm grade
     if (midtermCell) {
@@ -600,7 +645,9 @@ function showCategoryManager() {
 
 async function loadCategories() {
     try {
-        const resp = await fetch(`api/index.php?action=get_categories_by_period&class_id=${classId}&period=${period}`);
+        const resp = await fetch(`api/index.php?action=get_categories_by_period&class_id=${classId}&period=${period}`, {
+            credentials: 'include'
+        });
         const data = await resp.json();
         if (!data.success) return;
         
@@ -654,7 +701,9 @@ function selectCategory(categoryId, categoryName, categoryWeight) {
 
 async function loadItems(categoryId) {
     try {
-        const resp = await fetch(`api/index.php?action=get_grade_items_by_category&category_id=${categoryId}`);
+        const resp = await fetch(`api/index.php?action=get_grade_items_by_category&category_id=${categoryId}`, {
+            credentials: 'include'
+        });
         const data = await resp.json();
         
         const tbody = document.querySelector('#itemsTable tbody');
@@ -724,6 +773,7 @@ async function saveCategory() {
         const resp = await fetch(`api/index.php?action=${action}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify(data)
         });
         const result = await resp.json();
@@ -747,6 +797,7 @@ async function deleteCategory(id) {
         const resp = await fetch('api/index.php?action=delete_category', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ id })
         });
         const result = await resp.json();
@@ -808,6 +859,7 @@ async function saveGradeItem() {
         const resp = await fetch(`api/index.php?action=${action}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify(data)
         });
         const result = await resp.json();
@@ -831,6 +883,7 @@ async function deleteGradeItem(id) {
         const resp = await fetch('api/index.php?action=delete_grade_item', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
             body: JSON.stringify({ id })
         });
         const result = await resp.json();
