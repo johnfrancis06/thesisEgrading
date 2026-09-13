@@ -24,7 +24,7 @@ if ($classId > 0) {
     <title><?= $classId > 0 ? 'Grading Sheet - ' . APP_NAME : 'Select a Class - ' . APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=6">
+    <link rel="stylesheet" href="assets/css/style.css?v=7">
 </head>
 <body>
     <?php include 'includes/header.php'; ?>

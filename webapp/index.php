@@ -634,7 +634,7 @@ try {
     elseif ($action === 'add_grade_item') {
         $data = json_decode(file_get_contents("php://input"), true);
         $stmt = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-        $sort = 0;
+        $sort = intval($data['sort_order'] ?? 0);
         $stmt->bind_param("isdi", $data['category_id'], $data['label'], $data['max_score'], $sort);
         echo $stmt->execute() ? ResponseAPI::success(['id' => $db->insert_id], "Item added") 
             : ResponseAPI::error("Failed to add item");
@@ -646,6 +646,29 @@ try {
             $db->query("DELETE FROM grade_score WHERE grade_item_id = $itemId");
             $db->query("DELETE FROM grade_item WHERE id = $itemId");
             echo ResponseAPI::success([], "Item deleted");
+        } else {
+            echo ResponseAPI::error("Invalid item ID");
+        }
+    }
+    elseif ($action === 'get_grade_items_by_category') {
+        $categoryId = intval($_GET['category_id'] ?? 0);
+        if ($categoryId > 0) {
+            $stmt = $db->prepare("SELECT * FROM grade_item WHERE grade_category_id = ? ORDER BY sort_order");
+            $stmt->bind_param("i", $categoryId);
+            $stmt->execute();
+            echo ResponseAPI::success($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
+        } else {
+            echo ResponseAPI::error("Invalid category ID");
+        }
+    }
+    elseif ($action === 'update_grade_item') {
+        $data = json_decode(file_get_contents("php://input"), true);
+        $id = intval($data['id'] ?? 0);
+        if ($id > 0) {
+            $stmt = $db->prepare("UPDATE grade_item SET label = ?, max_score = ?, sort_order = ? WHERE id = ?");
+            $stmt->bind_param("sdii", $data['label'], $data['max_score'], $data['sort_order'], $id);
+            echo $stmt->execute() ? ResponseAPI::success([], "Item updated") 
+                : ResponseAPI::error("Failed to update item");
         } else {
             echo ResponseAPI::error("Invalid item ID");
         }
