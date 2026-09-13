@@ -225,6 +225,7 @@ function buildDynamicHeader(configs) {
     
     configs.forEach(config => {
         const items = config.items || [];
+        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
         const weight = config.weight_percent;
         const maxWeight = weight;
         
@@ -235,7 +236,7 @@ function buildDynamicHeader(configs) {
         // Total, Equiv, Weight
         headerHTML += `<th class="header-col header-total">Total</th>`;
         headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
-        headerHTML += `<th class="header-col header-weight"><span data-max-weight="${maxWeight}">${maxWeight}%</span></th>`;
+        headerHTML += `<th class="header-col header-weight"><input type="number" class="category-weight-input" value="${maxWeight}" min="0" max="100" step="0.01" data-config-id="${config.id || ''}" data-category-key="${key}" onchange="updateCategoryWeight(this)" aria-label="${key} category weight">%</th>`;
     });
     
     headerHTML += '</tr>';
@@ -274,24 +275,23 @@ function buildPerfectScoreRow(configs) {
 
 function buildStudentRow(student, configs, period) {
     const periodData = period === 'midterm' ? (student.midterm || {}) : (student.final || {});
-    const componentsData = periodData.components || {};
+    const componentsData = periodData.component_details || {};
     
     let html = `<tr data-student="${student.id}">`;
     html += `<td class="col-student">${student.last_name}, ${student.first_name} ${student.middle_initial || ''}.</td>`;
     
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-        const compData = componentsData[key] || { items: [], raw_total: 0, max_total: 0, perfect_score: 0 };
+        const compData = componentsData[key] || {};
         const items = config.items || [];
         const perfectScore = config.perfect_score;
-        const weight = config.weight_percent;
-        const itemCount = items.length;
+        const weight = parseFloat(config.weight_percent) || 0;
         
         // Render item inputs
         items.forEach((item, idx) => {
-            const itemData = compData.items[idx] || { raw_score: '', max_score: 0, item_id: null };
+            const itemData = (Array.isArray(compData.items) ? compData.items[idx] : null) || { raw_score: '', max_score: 0, item_id: null };
             const score = itemData.raw_score !== undefined && itemData.raw_score !== null ? itemData.raw_score : '';
-            const maxScore = itemData.max_score || item.max_score || maxPerItem;
+            const maxScore = parseFloat(itemData.max_score || item.max_score) || 100;
             
             html += `<td class="cell-raw">
                 <input type="number" class="grade-input" 
@@ -318,7 +318,7 @@ function buildStudentRow(student, configs, period) {
     let totalWeighted = 0;
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-        const compData = componentsData[key] || { raw_total: 0 };
+        const compData = componentsData[key] || {};
         const perfectScore = config.perfect_score;
         const weight = config.weight_percent;
         const rawTotal = compData.raw_total || 0;
@@ -404,6 +404,41 @@ function onWeightInput(input, studentId, componentKey) {
     calculateRowGrades(studentId);
 }
 
+async function updateCategoryWeight(input) {
+    const newWeight = parseFloat(input.value);
+    const configId = parseInt(input.dataset.configId, 10);
+
+    if (!configId || Number.isNaN(newWeight) || newWeight < 0 || newWeight > 100) {
+        input.value = input.defaultValue;
+        return;
+    }
+
+    try {
+        const resp = await fetch('api/index.php?action=update_category_config_weight', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                config_id: configId,
+                class_id: classId,
+                period,
+                weight_percent: newWeight
+            })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            throw new Error(data.message || 'Unable to update category weight');
+        }
+
+        input.defaultValue = newWeight;
+        loadGradingSheet(classId, period);
+    } catch (e) {
+        console.error('Error updating category weight:', e);
+        input.value = input.defaultValue;
+        alert(e.message);
+    }
+}
+
 function updateWeightFromEquiv(studentId, componentKey) {
     const row = document.querySelector(`tr[data-student="${studentId}"]`);
     if (!row) return;
@@ -459,7 +494,7 @@ function calculateRowGrades(studentId) {
     
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-        const weight = config.weight_percent;
+        const configuredWeight = config.weight_percent;
         const perfectScore = perfectScores[key] || config.perfect_score || 100;
         
         let total = 0;
@@ -474,7 +509,7 @@ function calculateRowGrades(studentId) {
         
         // Read weight from input (editable by teacher)
         const weightInput = document.querySelector(`input.weight-input[data-student="${studentId}"][data-component="${key}"]`);
-        let weight = weightInput ? parseFloat(weightInput.value) || 0 : weight;
+        let weight = weightInput ? parseFloat(weightInput.value) || 0 : configuredWeight;
         weight = weight / 100; // Convert percentage to decimal
         
         const weighted = equivScore * weight;
@@ -912,3 +947,4 @@ window.showAddItemModal = showAddItemModal;
 window.editGradeItem = editGradeItem;
 window.saveGradeItem = saveGradeItem;
 window.deleteGradeItem = deleteGradeItem;
+window.updateCategoryWeight = updateCategoryWeight;

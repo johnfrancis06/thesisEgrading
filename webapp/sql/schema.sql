@@ -42,10 +42,11 @@ CREATE TABLE IF NOT EXISTS student (
     last_name VARCHAR(100),
     first_name VARCHAR(100),
     middle_initial VARCHAR(5),
-    student_no VARCHAR(50) UNIQUE NOT NULL,
+    student_no VARCHAR(50) NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (class_section_id) REFERENCES class_section(id),
-    INDEX idx_class (class_section_id)
+    INDEX idx_class (class_section_id),
+    UNIQUE KEY unique_student_class (class_section_id, student_no)
 );
 
 CREATE TABLE IF NOT EXISTS grade_category (

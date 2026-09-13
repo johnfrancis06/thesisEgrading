@@ -318,7 +318,7 @@ try {
         $stmt = $db->prepare("INSERT INTO class_section 
             (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
             VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("iisiiis", $data['subject_id'], $faculty_id, $data['course_program'], 
+        $stmt->bind_param("iisisis", $data['subject_id'], $faculty_id, $data['course_program'], 
             $data['year_level'], $data['section'], $data['semester'], $data['academic_year']);
         
         if ($stmt->execute()) {
@@ -372,7 +372,7 @@ try {
             }
             echo ResponseAPI::success(['id' => $classId], "Class created", 201);
         } else {
-            echo ResponseAPI::error("Failed to create class");
+            echo ResponseAPI::error("Failed to create class: " . $stmt->error);
         }
     }
     elseif ($action === 'create_class_with_students') {
@@ -381,7 +381,7 @@ try {
         $stmt = $db->prepare("INSERT INTO class_section 
             (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
             VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("iisiiis", $data['subject_id'], $faculty_id, $data['course_program'], 
+        $stmt->bind_param("iisisis", $data['subject_id'], $faculty_id, $data['course_program'], 
             $data['year_level'], $data['section'], $data['semester'], $data['academic_year']);
         
         if ($stmt->execute()) {
@@ -449,7 +449,7 @@ try {
             
             echo ResponseAPI::success(['id' => $classId], "Class created with " . count($students) . " students", 201);
         } else {
-            echo ResponseAPI::error("Failed to create class");
+            echo ResponseAPI::error("Failed to create class: " . $stmt->error);
         }
     }
     elseif ($action === 'get_students') {
@@ -649,11 +649,17 @@ try {
     }
     elseif ($action === 'create_subject') {
         $data = json_decode(file_get_contents("php://input"), true);
+        $code = trim($data['code'] ?? '');
+        $title = trim($data['title'] ?? '');
+        if ($code === '' || $title === '') {
+            echo ResponseAPI::error("Subject code and title are required");
+            exit;
+        }
         $stmt = $db->prepare("INSERT INTO subject (code, title, default_units) VALUES (?, ?, ?)");
         $units = intval($data['default_units'] ?? 3);
-        $stmt->bind_param("ssi", $data['code'], $data['title'], $units);
+        $stmt->bind_param("ssi", $code, $title, $units);
         echo $stmt->execute() ? ResponseAPI::success(['id' => $db->insert_id], "Subject created", 201) 
-            : ResponseAPI::error("Failed to create subject");
+            : ResponseAPI::error("Failed to create subject: " . $stmt->error);
     }
     elseif ($action === 'update_subject') {
         $data = json_decode(file_get_contents("php://input"), true);
@@ -662,7 +668,7 @@ try {
         $stmt = $db->prepare("UPDATE subject SET code = ?, title = ?, default_units = ? WHERE id = ?");
         $stmt->bind_param("ssii", $data['code'], $data['title'], $units, $id);
         echo $stmt->execute() ? ResponseAPI::success([], "Subject updated") 
-            : ResponseAPI::error("Failed to update subject");
+            : ResponseAPI::error("Failed to update subject: " . $stmt->error);
     }
     elseif ($action === 'get_subjects') {
         try {
@@ -1106,7 +1112,7 @@ try {
                 (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
                 VALUES (?, ?, ?, ?, ?, ?, ?)");
             $semester = 1;
-            $stmt->bind_param("iisssis", $subjectId, $faculty_id, $program, $year, $section, $semester, $ay);
+            $stmt->bind_param("iisisis", $subjectId, $faculty_id, $program, $year, $section, $semester, $ay);
             if ($stmt->execute()) {
                 $classId = $db->insert_id;
                 $classes = [['id' => $classId]];
@@ -1147,6 +1153,9 @@ try {
             $insert->bind_param("issss", $class['id'], $data['last_name'], $data['first_name'], $data['middle_initial'], $data['student_no']);
             if ($insert->execute()) {
                 $enrolledCount++;
+            } else {
+                echo ResponseAPI::error("Failed to enroll student: " . $insert->error);
+                exit;
             }
         }
         
@@ -1565,6 +1574,14 @@ try {
             exit;
         }
         
+        // Remove synced rows before replacing configs because grade_category.config_id
+        // references grade_category_config.id without ON DELETE CASCADE.
+        $existingStmt = $db->prepare("SELECT id FROM grade_category_config WHERE class_section_id = ? AND period = ?");
+        $existingStmt->bind_param("is", $classId, $period);
+        $existingStmt->execute();
+        $existingConfigs = $existingStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        removeSyncedConfigRows($db, array_column($existingConfigs, 'id'));
+
         // Delete existing configs for this class/period (full replace)
         $stmt = $db->prepare("DELETE FROM grade_category_config WHERE class_section_id = ? AND period = ?");
         $stmt->bind_param("is", $classId, $period);
@@ -1619,6 +1636,8 @@ try {
         $classId = intval($_GET['class_id'] ?? 0);
         $period = $_GET['period'] ?? 'midterm';
         
+        removeSyncedConfigRows($db, [$configId]);
+
         $stmt = $db->prepare("DELETE FROM grade_category_config WHERE id = ? AND class_section_id = ? AND period = ?");
         $stmt->bind_param("iii", $configId, $classId, $period);
         $stmt->execute();
@@ -1627,6 +1646,28 @@ try {
         syncGradeTables($db, $classId, $period);
         
         echo ResponseAPI::success([], "Category deleted");
+    }
+    elseif ($action === 'update_category_config_weight') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $configId = intval($data['config_id'] ?? 0);
+        $classId = intval($data['class_id'] ?? 0);
+        $period = $data['period'] ?? 'midterm';
+        $weight = floatval($data['weight_percent'] ?? -1);
+
+        if (!$configId || !$classId || $weight < 0 || $weight > 100) {
+            echo ResponseAPI::error('Invalid category weight');
+            exit;
+        }
+
+        $stmt = $db->prepare('UPDATE grade_category_config SET weight_percent = ? WHERE id = ? AND class_section_id = ? AND period = ?');
+        $stmt->bind_param('diis', $weight, $configId, $classId, $period);
+        if (!$stmt->execute()) {
+            echo ResponseAPI::error('Unable to update category weight');
+            exit;
+        }
+
+        syncGradeTables($db, $classId, $period);
+        echo ResponseAPI::success([], 'Category weight updated');
     }
     elseif ($action === 'sync_grade_tables') {
         $classId = intval($_GET['class_id'] ?? 0);
@@ -1717,6 +1758,25 @@ function syncGradeTables($db, $classId, $period) {
         $stmt->bind_param("is", $classId, $period);
         $stmt->execute();
     }
+}
+
+function removeSyncedConfigRows($db, $configIds) {
+    $configIds = array_values(array_filter(array_map('intval', $configIds)));
+    if (empty($configIds)) {
+        return;
+    }
+
+    $idList = implode(',', $configIds);
+
+    // Scores depend on grade_item, which depends on grade_category.
+    $db->query("DELETE gs FROM grade_score gs
+        INNER JOIN grade_item gi ON gi.id = gs.grade_item_id
+        INNER JOIN grade_category gc ON gc.id = gi.grade_category_id
+        WHERE gc.config_id IN ($idList)");
+    $db->query("DELETE gi FROM grade_item gi
+        INNER JOIN grade_category gc ON gc.id = gi.grade_category_id
+        WHERE gc.config_id IN ($idList)");
+    $db->query("DELETE FROM grade_category WHERE config_id IN ($idList)");
 }
 
 function generateExcelReport($class, $students) {

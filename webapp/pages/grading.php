@@ -71,37 +71,19 @@ if ($classId > 0) {
                 </div>
             </div>
             
-            <!-- Perfect Scores Setup - Collapsible Category -->
+            <!-- Category Setup -->
             <div class="card border-info mb-3 fade-in perfect-score-category" id="perfectScoreCategory">
                 <div class="card-header bg-info text-white d-flex justify-content-between align-items-center category-header" onclick="togglePerfectScoreCategory()" style="cursor: pointer;">
-                    <h5 class="mb-0"><i class="bi bi-trophy me-2"></i>Perfect Scores (Highest Possible) - <?= ucfirst($period) ?></h5>
+                    <h5 class="mb-0"><i class="bi bi-collection me-2"></i>Grade Categories - <?= ucfirst($period) ?></h5>
                     <div class="d-flex align-items-center gap-2">
                         <i class="bi bi-chevron-down" id="perfectScoreChevron" style="font-size: 1.2rem; transition: transform 0.3s ease;"></i>
-                        <button class="btn btn-sm btn-light" onclick="event.stopPropagation(); showPerfectScoreModal()">
-                            <i class="bi bi-pencil-square"></i> Edit
+                        <button class="btn btn-sm btn-light" onclick="event.stopPropagation(); showCategoryManager()">
+                            <i class="bi bi-pencil-square"></i> Add / Edit / Delete
                         </button>
                     </div>
                 </div>
                 <div class="card-body category-body" id="perfectScoreBody">
-                    <div class="row g-3" id="perfectScoresDisplay">
-                        <div class="col-md-3">
-                            <label class="form-label">Class Participation</label>
-                            <input type="number" class="form-control perfect-score-input" data-component="class_participation" placeholder="Enter perfect score" readonly>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Problem Set</label>
-                            <input type="number" class="form-control perfect-score-input" data-component="problem_set" placeholder="Enter perfect score" readonly>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Quizzes</label>
-                            <input type="number" class="form-control perfect-score-input" data-component="quizzes" placeholder="Enter perfect score" readonly>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label">Periodical Exam</label>
-                            <input type="number" class="form-control perfect-score-input" data-component="periodical_exam" placeholder="Enter perfect score" readonly>
-                        </div>
-                    </div>
-                    <small class="text-muted">These are the highest possible scores for each component. They are used in the transmutation formula: (raw/perfect)*50+50</small>
+                    <p class="text-muted mb-0">Add, edit, or delete grading categories and their items. Category weights and perfect scores are managed together.</p>
                 </div>
             </div>
             
@@ -176,7 +158,7 @@ if ($classId > 0) {
 </div>
      
      <!-- Category Manager Modal -->
-     <div class="modal fade" id="categoryManagerModal" tabindex="-1" aria-hidden="true">
+    <div class="modal fade" id="legacyCategoryManagerModal" tabindex="-1" aria-hidden="true">
          <div class="modal-dialog modal-xl modal-dialog-scrollable">
              <div class="modal-content">
                  <div class="modal-header">
@@ -194,7 +176,7 @@ if ($classId > 0) {
                                      </button>
                                  </div>
                                  <div class="card-body p-0">
-                                     <ul class="list-group list-group-flush" id="categoryList">
+                                     <ul class="list-group list-group-flush" id="legacyCategoryList">
                                          <li class="list-group-item text-center text-muted py-4">Loading...</li>
                                      </ul>
                                  </div>

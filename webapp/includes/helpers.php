@@ -183,13 +183,15 @@ class GradingHelper {
                 'grade' => $midtermGrade,
                 'grade_point' => $midtermGradePoint,
                 'remarks' => self::getRemarks($midtermGradePoint, $hasMidtermScores),
-                'components' => $componentScores['midterm']
+                'components' => $componentScores['midterm'],
+                'component_details' => $periodData['midterm']
             ],
             'final' => [
                 'grade' => $finalGrade,
                 'grade_point' => $finalGradePoint,
                 'remarks' => self::getRemarks($finalGradePoint, $hasFinalScores),
-                'components' => $componentScores['final']
+                'components' => $componentScores['final'],
+                'component_details' => $periodData['final']
             ],
             'overall' => [
                 'grade' => $overallGrade,
@@ -215,7 +217,9 @@ class GradingHelper {
         if (strpos($name, 'exam') !== false || strpos($name, 'periodical') !== false) {
             return 'periodical_exam';
         }
-        return null;
+        // Keep custom category names addressable by the dynamic grading sheet.
+        $customKey = preg_replace('/[^a-z0-9]+/', '_', $name);
+        return trim($customKey, '_') ?: null;
     }
 }
 

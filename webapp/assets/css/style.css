@@ -1068,8 +1068,9 @@ small { color: var(--gray-500); }
     border-collapse: collapse;
     font-family: 'Calibri', 'Arial', sans-serif;
     font-size: 13px;
-    width: 100%;
-    table-layout: fixed;
+    width: max-content;
+    min-width: 100%;
+    table-layout: auto;
     background: #fff;
 }
 
@@ -1099,7 +1100,8 @@ small { color: var(--gray-500); }
     background: #D9D9D9;
     font-size: 11px;
     line-height: 1.2;
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 /* Row 1: Main category headers */
@@ -1145,6 +1147,20 @@ small { color: var(--gray-500); }
     min-width: 55px;
     max-width: 55px;
 }
+.grading-table-excel .category-weight-input {
+    width: 42px;
+    padding: 2px;
+    border: 1px solid rgba(255, 255, 255, 0.75);
+    background: #FF0000;
+    color: #FFF;
+    text-align: center;
+    font-weight: 700;
+    box-sizing: border-box;
+}
+.grading-table-excel .category-weight-input:focus {
+    outline: 2px solid #fff;
+    outline-offset: 1px;
+}
 .grading-table-excel th.header-midterm {
     background: #FFFF00 !important;
     color: #000 !important;
@@ -1168,6 +1184,10 @@ small { color: var(--gray-500); }
     max-width: 220px;
     text-align: center;
     padding: 6px 8px;
+    white-space: nowrap;
+    position: sticky;
+    left: 0;
+    z-index: 12;
 }
 
 /* Body cells */
@@ -1179,6 +1199,7 @@ small { color: var(--gray-500); }
     background: #fff;
     color: #000;
     font-size: 13px;
+    overflow: hidden;
 }
 
 /* Student name column */
@@ -1193,6 +1214,9 @@ small { color: var(--gray-500); }
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    position: sticky;
+    left: 0;
+    z-index: 10;
 }
 
 /* Raw score input cells */
@@ -1352,6 +1376,10 @@ small { color: var(--gray-500); }
     overflow-x: auto;
     overflow-y: auto;
     max-height: 75vh;
+    min-width: 0;
+    width: 100%;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
     border: 1px solid #999;
     border-radius: 4px;
     background: #fff;
@@ -1359,7 +1387,20 @@ small { color: var(--gray-500); }
 
 .grading-table-wrapper {
     display: inline-block;
+    width: max-content;
     min-width: 100%;
+}
+
+.grading-table-excel th.header-main {
+    min-width: 110px;
+    max-width: 180px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.grading-table-excel td.cell-remarks {
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 /* Period badge in topbar */
