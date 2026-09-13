@@ -95,56 +95,8 @@ if ($classId <= 0) {
                 
                 <!-- GE-104 Report Types -->
                 <div class="row g-3 mb-4 fade-in">
-                    <!-- Class Record - Detailed breakdown with all components -->
-                    <div class="col-md-4">
-                        <div class="card h-100 border-primary">
-                            <div class="card-header bg-primary text-white">
-                                <h5 class="mb-0"><i class="bi bi-file-earmark-pdf me-2"></i>Class Record</h5>
-                            </div>
-                            <div class="card-body text-center py-5">
-                                <div class="stat-icon red mx-auto mb-3">
-                                    <i class="bi bi-table"></i>
-                                </div>
-                                <h5 class="mb-2">Class Record (DepEd/CHED)</h5>
-                                <p class="text-muted mb-4">Complete grading breakdown with all 4 components per period (CP, PS, Quiz, Exam)</p>
-                                <div class="d-flex flex-column gap-2">
-                                    <button class="btn btn-danger" onclick="exportReport('class_record', <?= $classId ?>, 'pdf')">
-                                        <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
-                                    </button>
-                                    <button class="btn btn-success" onclick="exportReport('class_record', <?= $classId ?>, 'xlsx')">
-                                        <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- E-Grading - For registrar submission -->
-                    <div class="col-md-4">
-                        <div class="card h-100 border-warning">
-                            <div class="card-header bg-warning text-dark">
-                                <h5 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>E-Grading</h5>
-                            </div>
-                            <div class="card-body text-center py-5">
-                                <div class="stat-icon orange mx-auto mb-3">
-                                    <i class="bi bi-send"></i>
-                                </div>
-                                <h5 class="mb-2">E-Grading Submission</h5>
-                                <p class="text-muted mb-4">Optimized for registrar portal submission (Name, Midterm, Final, Grade Point)</p>
-                                <div class="d-flex flex-column gap-2">
-                                    <button class="btn btn-danger" onclick="exportReport('egrading', <?= $classId ?>, 'pdf')">
-                                        <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
-                                    </button>
-                                    <button class="btn btn-success" onclick="exportReport('egrading', <?= $classId ?>, 'xlsx')">
-                                        <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
                     <!-- Grading Sheet - Summary roster -->
-                    <div class="col-md-4">
+                    <div class="col-md-6 col-lg-4">
                         <div class="card h-100 border-info">
                             <div class="card-header bg-info text-white">
                                 <h5 class="mb-0"><i class="bi bi-journal-text me-2"></i>Grading Sheet</h5>
@@ -161,6 +113,9 @@ if ($classId <= 0) {
                                     </button>
                                     <button class="btn btn-success" onclick="exportReport('grading_sheet', <?= $classId ?>, 'xlsx')">
                                         <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
+                                    </button>
+                                    <button class="btn btn-primary" onclick="exportReport('grading_sheet', <?= $classId ?>, 'doc')">
+                                        <i class="bi bi-file-earmark-word me-1"></i> Export Word
                                     </button>
                                 </div>
                             </div>
@@ -197,16 +152,22 @@ if ($classId <= 0) {
                 <!-- Preview Area -->
                 <div class="card fade-in">
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-eye me-2"></i>Class Record Preview</span>
+                        <span><i class="bi bi-eye me-2"></i>Grading Sheet Preview</span>
                         <div class="btn-group btn-group-sm">
-                            <button class="btn btn-outline-secondary" onclick="previewReport('class_record', <?= $classId ?>)">
-                                <i class="bi bi-table me-1"></i> Class Record
-                            </button>
-                            <button class="btn btn-outline-secondary" onclick="previewReport('egrading', <?= $classId ?>)">
-                                <i class="bi bi-send me-1"></i> E-Grading
-                            </button>
                             <button class="btn btn-outline-secondary" onclick="previewReport('grading_sheet', <?= $classId ?>)">
                                 <i class="bi bi-journal-text me-1"></i> Grading Sheet
+                            </button>
+                            <button class="btn btn-outline-primary" id="editReportBtn" onclick="toggleReportEditing()" disabled>
+                                <i class="bi bi-pencil me-1"></i> Edit Content
+                            </button>
+                            <button class="btn btn-outline-success" id="saveReportBtn" onclick="saveReportDraft()" disabled>
+                                <i class="bi bi-save me-1"></i> Save Draft
+                            </button>
+                            <button class="btn btn-outline-dark" id="printEditedReportBtn" onclick="printEditedReport()" disabled>
+                                <i class="bi bi-printer me-1"></i> Print Edited
+                            </button>
+                            <button class="btn btn-outline-info" id="editLogoBtn" onclick="openLogoEditor()" disabled>
+                                <i class="bi bi-image me-1"></i> Edit Logo
                             </button>
                         </div>
                     </div>
@@ -218,6 +179,36 @@ if ($classId <= 0) {
                     </div>
                 </div>
             <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="modal fade" id="logoEditorModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title"><i class="bi bi-image me-2"></i>Edit University Logo</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="file" id="logoFileInput" class="form-control mb-3" accept="image/png,image/jpeg,image/webp" onchange="loadLogoFile(event)">
+                    <div class="logo-editor-preview mb-3">
+                        <canvas id="logoCropCanvas"></canvas>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-6 col-md-3"><label class="form-label">Crop X</label><input id="logoCropX" type="number" class="form-control" min="0" value="0" oninput="renderLogoCrop()"></div>
+                        <div class="col-6 col-md-3"><label class="form-label">Crop Y</label><input id="logoCropY" type="number" class="form-control" min="0" value="0" oninput="renderLogoCrop()"></div>
+                        <div class="col-6 col-md-3"><label class="form-label">Crop Width</label><input id="logoCropW" type="number" class="form-control" min="1" value="100" oninput="renderLogoCrop()"></div>
+                        <div class="col-6 col-md-3"><label class="form-label">Crop Height</label><input id="logoCropH" type="number" class="form-control" min="1" value="100" oninput="renderLogoCrop()"></div>
+                        <div class="col-6 col-md-3"><label class="form-label">Output Width</label><input id="logoOutputW" type="number" class="form-control" min="40" max="1000" value="160" oninput="renderLogoCrop()"></div>
+                        <div class="col-6 col-md-3"><label class="form-label">Output Height</label><input id="logoOutputH" type="number" class="form-control" min="40" max="1000" value="140" oninput="renderLogoCrop()"></div>
+                    </div>
+                    <small class="text-muted d-block mt-2">Upload an image, adjust the crop rectangle, then choose the output size.</small>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="applyLogoToReport()">Apply Logo</button>
+                </div>
+            </div>
         </div>
     </div>
     
@@ -240,10 +231,138 @@ if ($classId <= 0) {
                 .then(response => response.text())
                 .then(html => {
                     previewDiv.innerHTML = html;
+                    enableReportControls();
+                    restoreReportDraft(classId);
+                    applySavedLogo();
                 })
                 .catch(err => {
                     previewDiv.innerHTML = '<div class="text-center py-4 text-danger">Error loading preview: ' + err.message + '</div>';
                 });
+        }
+
+        function getReportPreviewTable() {
+            return document.querySelector('#classRecordPreview table.grade-sheet');
+        }
+
+        function enableReportControls() {
+            ['editReportBtn', 'saveReportBtn', 'printEditedReportBtn', 'editLogoBtn'].forEach(id => {
+                document.getElementById(id).disabled = false;
+            });
+        }
+
+        function toggleReportEditing() {
+            const table = getReportPreviewTable();
+            if (!table) return;
+            const editable = table.dataset.editable !== 'true';
+            table.dataset.editable = editable ? 'true' : 'false';
+            table.querySelectorAll('td').forEach(cell => {
+                cell.contentEditable = editable ? 'true' : 'false';
+                cell.classList.toggle('report-editable-cell', editable);
+            });
+            document.getElementById('editReportBtn').innerHTML = editable
+                ? '<i class="bi bi-check2 me-1"></i> Finish Editing'
+                : '<i class="bi bi-pencil me-1"></i> Edit Content';
+        }
+
+        function saveReportDraft() {
+            const table = getReportPreviewTable();
+            if (!table) return;
+            localStorage.setItem('grading-report-draft-<?= $classId ?>', table.outerHTML);
+            alert('Report draft saved in this browser.');
+        }
+
+        function restoreReportDraft(classId) {
+            const saved = localStorage.getItem(`grading-report-draft-${classId}`);
+            const preview = document.getElementById('classRecordPreview');
+            if (!saved || !preview) return;
+            const currentTable = getReportPreviewTable();
+            if (currentTable && confirm('Restore the saved edited report draft?')) {
+                currentTable.replaceWith(document.createRange().createContextualFragment(saved));
+            }
+        }
+
+        function printEditedReport() {
+            const table = getReportPreviewTable();
+            if (!table) return;
+            const printWindow = window.open('', '_blank', 'width=1200,height=800');
+            if (!printWindow) return;
+            printWindow.document.write(`<html><head><title>Edited Grading Sheet</title><style>
+                @page{size:landscape;margin:10mm}body{font-family:Arial;font-size:10px}
+                table{border-collapse:collapse;width:100%}th,td{border:1px solid #000;padding:4px;text-align:center}
+                th{background:#d9d9d9}td.name{text-align:left}</style></head><body>${table.outerHTML}</body></html>`);
+            printWindow.document.close();
+            printWindow.print();
+        }
+
+        let logoEditorImage = null;
+
+        function openLogoEditor() {
+            if (!getReportPreviewTable()) {
+                alert('Load the Grading Sheet preview first.');
+                return;
+            }
+            new bootstrap.Modal(document.getElementById('logoEditorModal')).show();
+        }
+
+        function loadLogoFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function () {
+                const image = new Image();
+                image.onload = function () {
+                    logoEditorImage = image;
+                    document.getElementById('logoCropX').value = 0;
+                    document.getElementById('logoCropY').value = 0;
+                    document.getElementById('logoCropW').value = image.naturalWidth;
+                    document.getElementById('logoCropH').value = image.naturalHeight;
+                    renderLogoCrop();
+                };
+                image.src = reader.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function renderLogoCrop() {
+            if (!logoEditorImage) return;
+            const canvas = document.getElementById('logoCropCanvas');
+            const cropX = Math.max(0, parseInt(document.getElementById('logoCropX').value, 10) || 0);
+            const cropY = Math.max(0, parseInt(document.getElementById('logoCropY').value, 10) || 0);
+            const cropW = Math.max(1, parseInt(document.getElementById('logoCropW').value, 10) || 1);
+            const cropH = Math.max(1, parseInt(document.getElementById('logoCropH').value, 10) || 1);
+            const outputW = Math.max(40, parseInt(document.getElementById('logoOutputW').value, 10) || 160);
+            const outputH = Math.max(40, parseInt(document.getElementById('logoOutputH').value, 10) || 140);
+            const safeX = Math.min(cropX, logoEditorImage.naturalWidth - 1);
+            const safeY = Math.min(cropY, logoEditorImage.naturalHeight - 1);
+            const safeW = Math.min(cropW, logoEditorImage.naturalWidth - safeX);
+            const safeH = Math.min(cropH, logoEditorImage.naturalHeight - safeY);
+
+            canvas.width = outputW;
+            canvas.height = outputH;
+            canvas.getContext('2d').drawImage(logoEditorImage, safeX, safeY, safeW, safeH, 0, 0, outputW, outputH);
+        }
+
+        function applyLogoToReport() {
+            if (!logoEditorImage) {
+                alert('Choose an image first.');
+                return;
+            }
+            const canvas = document.getElementById('logoCropCanvas');
+            const logoData = canvas.toDataURL('image/png');
+            localStorage.setItem('grading-report-logo-<?= $classId ?>', logoData);
+            setReportLogo(logoData);
+            bootstrap.Modal.getInstance(document.getElementById('logoEditorModal')).hide();
+        }
+
+        function setReportLogo(logoData) {
+            const logoBox = document.querySelector('#classRecordPreview .logo-box');
+            if (!logoBox) return;
+            logoBox.innerHTML = `<img src="${logoData}" alt="University logo">`;
+        }
+
+        function applySavedLogo() {
+            const logoData = localStorage.getItem('grading-report-logo-<?= $classId ?>');
+            if (logoData) setReportLogo(logoData);
         }
         
         function exportAttendance(classId, format) {

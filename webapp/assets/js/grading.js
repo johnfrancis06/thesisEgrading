@@ -934,6 +934,80 @@ async function deleteGradeItem(id) {
     }
 }
 
+function getExportTable() {
+    const table = document.getElementById('gradingTable');
+    if (!table || !table.querySelector('tbody tr')) {
+        alert('The grading sheet is still loading. Please try again.');
+        return null;
+    }
+
+    const exportTable = table.cloneNode(true);
+    exportTable.querySelectorAll('input, select, textarea').forEach(input => {
+        const cell = input.closest('th, td');
+        if (cell) cell.textContent = input.value || '';
+    });
+    exportTable.querySelectorAll('[style]').forEach(element => element.removeAttribute('style'));
+    return exportTable;
+}
+
+function getGradingExportName(extension) {
+    const classCode = document.querySelector('.page-header h1')?.textContent.trim() || 'grading-sheet';
+    const classInfo = document.querySelector('.page-header p')?.textContent.trim() || '';
+    const safeName = `${classCode}-${classInfo}-${period}`.replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '');
+    return `${safeName || 'grading-sheet'}.${extension}`;
+}
+
+function exportVisibleGradingSheet(format) {
+    const table = getExportTable();
+    if (!table) return;
+
+    if (format === 'excel') {
+        if (typeof XLSX === 'undefined') {
+            alert('Excel export is unavailable because the spreadsheet library did not load.');
+            return;
+        }
+        const workbook = XLSX.utils.table_to_book(table, { sheet: 'Grading Sheet' });
+        XLSX.writeFile(workbook, getGradingExportName('xlsx'));
+        return;
+    }
+
+    const title = document.querySelector('.page-header h1')?.textContent.trim() || 'Grading Sheet';
+    const metadata = document.querySelector('.page-header p')?.textContent.trim() || '';
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
+        <style>body{font-family:Calibri,Arial,sans-serif;font-size:10pt}h1,h2,p{text-align:center;margin:4px}
+        table{border-collapse:collapse;width:100%}th,td{border:1px solid #777;padding:4px;text-align:center;vertical-align:middle}
+        th{background:#d9d9d9;font-weight:700}td:first-child{text-align:left;white-space:nowrap}</style>
+        </head><body><h1>GRADING SHEET</h1><h2>${title}</h2><p>${metadata} | ${period.toUpperCase()}</p>${table.outerHTML}</body></html>`;
+    const blob = new Blob([html], { type: 'application/msword' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = getGradingExportName('doc');
+    link.click();
+    URL.revokeObjectURL(link.href);
+}
+
+function printVisibleGradingSheet() {
+    const table = getExportTable();
+    if (!table) return;
+
+    const title = document.querySelector('.page-header h1')?.textContent.trim() || 'Grading Sheet';
+    const metadata = document.querySelector('.page-header p')?.textContent.trim() || '';
+    const printWindow = window.open('', '_blank', 'width=1200,height=800');
+    if (!printWindow) {
+        alert('Please allow pop-ups to print the grading sheet.');
+        return;
+    }
+    printWindow.document.write(`<!DOCTYPE html><html><head><title>${title}</title><style>
+        @page{size:landscape;margin:8mm}body{font-family:Calibri,Arial,sans-serif;font-size:9pt}
+        h1,h2,p{text-align:center;margin:3px}table{border-collapse:collapse;width:100%}
+        th,td{border:1px solid #777;padding:3px;text-align:center;vertical-align:middle}
+        th{background:#d9d9d9;font-weight:700}td:first-child{text-align:left;white-space:nowrap}
+    </style></head><body><h1>GRADING SHEET</h1><h2>${title}</h2><p>${metadata} | ${period.toUpperCase()}</p>${table.outerHTML}</body></html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
+}
+
 // Make functions globally accessible
 window.showCategoryManager = showCategoryManager;
 window.loadCategories = loadCategories;
@@ -948,3 +1022,5 @@ window.editGradeItem = editGradeItem;
 window.saveGradeItem = saveGradeItem;
 window.deleteGradeItem = deleteGradeItem;
 window.updateCategoryWeight = updateCategoryWeight;
+window.exportVisibleGradingSheet = exportVisibleGradingSheet;
+window.printVisibleGradingSheet = printVisibleGradingSheet;

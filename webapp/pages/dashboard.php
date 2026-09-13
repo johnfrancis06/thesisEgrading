@@ -84,6 +84,18 @@ $attOverview = $db->query("SELECT
         </header>
         
         <main class="content-area-modern">
+            <section class="dashboard-brief" aria-label="Dashboard overview">
+                <div>
+                    <span class="dashboard-kicker"><i class="bi bi-grid-1x2-fill"></i> Faculty workspace</span>
+                    <h2>Keep your classes moving.</h2>
+                    <p>Review teaching activity, update grades, and stay ahead of attendance in one place.</p>
+                </div>
+                <div class="dashboard-brief-meta">
+                    <span class="brief-date"><i class="bi bi-calendar3"></i> <?= date('F j, Y') ?></span>
+                    <a href="index.php?page=classes" class="btn brief-action"><i class="bi bi-arrow-right"></i> Open classes</a>
+                </div>
+            </section>
+
             <!-- Stats Grid -->
             <section class="stats-grid" aria-label="Key Statistics">
                 <article class="stat-card stat-primary" onclick="window.location.href='index.php?page=classes'">

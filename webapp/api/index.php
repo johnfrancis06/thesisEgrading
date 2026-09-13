@@ -1525,6 +1525,8 @@ try {
         
         if ($format === 'xlsx' || $format === 'excel') {
             generateGradingSheetExcel($class, $gradesData);
+        } elseif ($format === 'doc' || $format === 'word') {
+            generateGradingSheetDoc($class, $gradesData);
         } else {
             generateGradingSheetPdf($class, $gradesData);
         }
@@ -2262,87 +2264,60 @@ function generateEGradingPdf($class, $gradesData) {
 }
 
 function generateGradingSheetExcel($class, $gradesData) {
-    header('Content-Type: text/csv');
-    header('Content-Disposition: attachment; filename="GradingSheet_' . $class['code'] . '.csv"');
-    
-    $fp = fopen('php://output', 'w');
-    fprintf($fp, "\xEF\xBB\xBF");
-    
-    fputcsv($fp, ['GRADING SHEET']);
-    fputcsv($fp, ['Course: ' . $class['code'] . ' - ' . $class['title']]);
-    fputcsv($fp, ['Class: ' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section']]);
-    fputcsv($fp, ['AY: ' . $class['academic_year']]);
-    fputcsv($fp, []);
-    
-    $headers = ['No.', 'Student No', 'Name (Last, First MI)', 'Midterm Rating', 'Midterm Remarks', 'Final Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks'];
-    fputcsv($fp, $headers);
-    
-    foreach ($gradesData as $i => $student) {
-        $name = $student['last_name'] . ', ' . $student['first_name'] . ' ' . $student['middle_initial'] . '.';
-        $midtermRating = round($student['midterm']['grade']);
-        $midtermRemarks = $student['midterm']['remarks'];
-        $finalRating = round($student['final']['grade']);
-        $finalGrade = $student['overall']['grade_point'];
-        $unitCredit = 3;
-        $remarks = $student['overall']['remarks'];
-        
-        fputcsv($fp, [
-            $i + 1,
-            $student['student_no'],
-            $name,
-            $midtermRating,
-            $midtermRemarks,
-            $finalRating,
-            $finalGrade,
-            $unitCredit,
-            $remarks
-        ]);
-    }
+    header('Content-Type: application/vnd.ms-excel; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="GradingSheet_' . preg_replace('/[^a-z0-9_-]+/i', '_', $class['code']) . '.xls"');
+    echo gradingSheetHtml($class, $gradesData, true);
 }
 
 function generateGradingSheetPdf($class, $gradesData) {
-    echo '<html><head><meta charset="utf-8"><title>Grading Sheet - ' . $class['code'] . '</title>';
-    echo '<style>
-        body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
-        table { border-collapse: collapse; width: 100%; }
-        th, td { border: 1px solid #000; padding: 6px; text-align: center; font-size: 10px; }
-        th { background: #f0f0f0; font-weight: bold; }
-        .header { text-align: center; margin-bottom: 20px; }
-        .header h2 { margin: 5px 0; }
+    echo gradingSheetHtml($class, $gradesData, false);
+}
+
+function generateGradingSheetDoc($class, $gradesData) {
+    header('Content-Type: application/msword; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="GradingSheet_' . preg_replace('/[^a-z0-9_-]+/i', '_', $class['code']) . '.doc"');
+    echo gradingSheetHtml($class, $gradesData, false);
+}
+
+function gradingSheetHtml($class, $gradesData, $excelMode = false) {
+    $code = htmlspecialchars($class['code'] ?? '', ENT_QUOTES, 'UTF-8');
+    $title = htmlspecialchars($class['title'] ?? '', ENT_QUOTES, 'UTF-8');
+    $program = htmlspecialchars($class['course_program'] ?? '', ENT_QUOTES, 'UTF-8');
+    $year = htmlspecialchars($class['year_level'] ?? '', ENT_QUOTES, 'UTF-8');
+    $section = htmlspecialchars($class['section'] ?? '', ENT_QUOTES, 'UTF-8');
+    $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
+    $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
+
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . $code . '</title><style>
+        @page { size: landscape; margin: 10mm; }
+        body { font-family: Arial, sans-serif; font-size: 10px; color: #000; margin: 12px; }
+        .document-header { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+        .document-header td { border: 1px solid #555; padding: 5px; vertical-align: middle; }
+        .logo-box { width: 80px; height: 70px; text-align: center; font-size: 9px; font-weight: bold; }
+        .document-title { text-align: center; font-size: 16px; font-weight: bold; }
+        .meta { margin: 4px 0; font-weight: bold; }
+        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; }
+        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
+        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
     </style></head><body>';
-    
-    echo '<div class="header">';
-    echo '<h2>GRADING SHEET</h2>';
-    echo '<p>' . $class['code'] . ' - ' . $class['title'] . '</p>';
-    echo '<p>' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section'] . ' | AY ' . $class['academic_year'] . '</p>';
-    echo '</div>';
-    
-    echo '<table>';
-    echo '<tr><th>No.</th><th>Student No</th><th>Name (Last, First MI)</th><th>Midterm Rating</th><th>Midterm Remarks</th><th>Final Numerical Rating</th><th>Final Grade</th><th>Unit Credit</th><th>Remarks</th></tr>';
-    
+    $html .= '<table class="document-header"><tr><td class="logo-box">CAPIZ STATE UNIVERSITY</td><td>Document Type:<br><b>FORM</b><br><br>Document Title:<br><b>GRADE SHEET</b></td><td>Document Code: <b>REG-F12</b><br>Revision No.: <b>00</b><br>Effective Date: <b>June 25, 2018</b></td></tr></table>';
+    $html .= '<div class="meta">Course Number: ' . $code . '</div><div class="meta">Course Title: ' . $title . '</div>';
+    $html .= '<div class="meta">' . $semester . ' Semester/Semester AY ' . $academicYear . '</div><div class="meta">Course and Year: ' . $program . ' ' . $year . '-' . $section . '</div>';
+    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+
     foreach ($gradesData as $i => $student) {
-        $name = $student['last_name'] . ', ' . $student['first_name'] . ' ' . $student['middle_initial'] . '.';
-        $midtermRating = round($student['midterm']['grade']);
-        $midtermRemarks = $student['midterm']['remarks'];
-        $finalRating = round($student['final']['grade']);
-        $finalGrade = $student['overall']['grade_point'];
-        $unitCredit = 3;
-        $remarks = $student['overall']['remarks'];
-        
-        echo '<tr>';
-        echo '<td>' . ($i + 1) . '</td>';
-        echo '<td>' . $student['student_no'] . '</td>';
-        echo '<td style="text-align:left;">' . $name . '</td>';
-        echo '<td>' . $midtermRating . '</td>';
-        echo '<td>' . $midtermRemarks . '</td>';
-        echo '<td>' . $finalRating . '</td>';
-        echo '<td>' . $finalGrade . '</td>';
-        echo '<td>' . $unitCredit . '</td>';
-        echo '<td>' . $remarks . '</td>';
-        echo '</tr>';
+        $name = htmlspecialchars(trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
+        $midtermRating = round($student['midterm']['grade'] ?? 0);
+        $midtermRemarks = htmlspecialchars($student['midterm']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
+        $finalRating = round($student['final']['grade'] ?? 0);
+        $finalGrade = htmlspecialchars((string)($student['overall']['grade_point'] ?? 'INC'), ENT_QUOTES, 'UTF-8');
+        $remarks = htmlspecialchars($student['overall']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
+        $html .= '<tr><td>' . ($i + 1) . '</td><td class="name">' . $name . '</td><td>' . ($midtermRating ?: 'INC') . '</td><td>' . $midtermRemarks . '</td><td>' . ($finalRating ?: 'INC') . '</td><td>' . $finalGrade . '</td><td>3</td><td>' . $remarks . '</td></tr>';
     }
-    echo '</table>';
-    echo '</body></html>';
+    return $html . '</tbody></table></body></html>';
 }
 ?>
 

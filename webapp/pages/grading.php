@@ -361,7 +361,7 @@ if ($classId > 0) {
          </div>
      </div>
 
-     <script src="assets/vendor/bootstrap.bundle.min.js"></script>
+    <script src="assets/vendor/bootstrap.bundle.min.js"></script>
      <script src="assets/js/grading.js"></script>
     <?php if ($classId > 0): ?>
     <script>
