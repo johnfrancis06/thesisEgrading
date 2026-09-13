@@ -21,7 +21,7 @@ if ($classId <= 0) {
     <title><?= $classId <= 0 ? 'Select a Class' : 'Reports - ' . htmlspecialchars($class['code']) ?> - <?= APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=3">
+    <link rel="stylesheet" href="assets/css/style.css?v=4">
 </head>
 <body>
     <?php include 'includes/header.php'; ?>
@@ -93,55 +93,94 @@ if ($classId <= 0) {
                     </div>
                 </div>
                 
+                <!-- GE-104 Report Types -->
+                <div class="row g-3 mb-4 fade-in">
+                    <!-- Class Record - Detailed breakdown with all components -->
+                    <div class="col-md-4">
+                        <div class="card h-100 border-primary">
+                            <div class="card-header bg-primary text-white">
+                                <h5 class="mb-0"><i class="bi bi-file-earmark-pdf me-2"></i>Class Record</h5>
+                            </div>
+                            <div class="card-body text-center py-5">
+                                <div class="stat-icon red mx-auto mb-3">
+                                    <i class="bi bi-table"></i>
+                                </div>
+                                <h5 class="mb-2">Class Record (DepEd/CHED)</h5>
+                                <p class="text-muted mb-4">Complete grading breakdown with all 4 components per period (CP, PS, Quiz, Exam)</p>
+                                <div class="d-flex flex-column gap-2">
+                                    <button class="btn btn-danger" onclick="exportReport('class_record', <?= $classId ?>, 'pdf')">
+                                        <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
+                                    </button>
+                                    <button class="btn btn-success" onclick="exportReport('class_record', <?= $classId ?>, 'xlsx')">
+                                        <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- E-Grading - For registrar submission -->
+                    <div class="col-md-4">
+                        <div class="card h-100 border-warning">
+                            <div class="card-header bg-warning text-dark">
+                                <h5 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>E-Grading</h5>
+                            </div>
+                            <div class="card-body text-center py-5">
+                                <div class="stat-icon orange mx-auto mb-3">
+                                    <i class="bi bi-send"></i>
+                                </div>
+                                <h5 class="mb-2">E-Grading Submission</h5>
+                                <p class="text-muted mb-4">Optimized for registrar portal submission (Name, Midterm, Final, Grade Point)</p>
+                                <div class="d-flex flex-column gap-2">
+                                    <button class="btn btn-danger" onclick="exportReport('egrading', <?= $classId ?>, 'pdf')">
+                                        <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
+                                    </button>
+                                    <button class="btn btn-success" onclick="exportReport('egrading', <?= $classId ?>, 'xlsx')">
+                                        <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Grading Sheet - Summary roster -->
+                    <div class="col-md-4">
+                        <div class="card h-100 border-info">
+                            <div class="card-header bg-info text-white">
+                                <h5 class="mb-0"><i class="bi bi-journal-text me-2"></i>Grading Sheet</h5>
+                            </div>
+                            <div class="card-body text-center py-5">
+                                <div class="stat-icon purple mx-auto mb-3">
+                                    <i class="bi bi-journal-check"></i>
+                                </div>
+                                <h5 class="mb-2">Grading Sheet</h5>
+                                <p class="text-muted mb-4">Condensed roster: Midterm/Final ratings, Grade Point, Unit Credit</p>
+                                <div class="d-flex flex-column gap-2">
+                                    <button class="btn btn-danger" onclick="exportReport('grading_sheet', <?= $classId ?>, 'pdf')">
+                                        <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
+                                    </button>
+                                    <button class="btn btn-success" onclick="exportReport('grading_sheet', <?= $classId ?>, 'xlsx')">
+                                        <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Attendance Report -->
                 <div class="row g-3 mb-4 fade-in">
                     <div class="col-md-4">
                         <div class="card h-100">
-                            <div class="card-body text-center py-5">
-                                <div class="stat-icon red mx-auto mb-3">
-                                    <i class="bi bi-file-earmark-pdf"></i>
-                                </div>
-                                <h5 class="mb-2">Class Record</h5>
-                                <p class="text-muted mb-4">Complete grading breakdown with all components</p>
-                                <div class="d-flex gap-2 justify-content-center">
-                                    <button class="btn btn-danger" onclick="exportClassRecord(<?= $classId ?>, 'pdf')">
-                                        <i class="bi bi-download"></i> Export PDF
-                                    </button>
-                                    <button class="btn btn-success" onclick="exportClassRecord(<?= $classId ?>, 'xlsx')">
-                                        <i class="bi bi-file-earmark-excel"></i> Export Excel
-                                    </button>
-                                </div>
+                            <div class="card-header bg-secondary text-white">
+                                <h5 class="mb-0"><i class="bi bi-calendar-check me-2"></i>Attendance Report</h5>
                             </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-4">
-                        <div class="card h-100">
                             <div class="card-body text-center py-5">
-                                <div class="stat-icon orange mx-auto mb-3">
-                                    <i class="bi bi-file-earmark-text"></i>
+                                <div class="stat-icon teal mx-auto mb-3">
+                                    <i class="bi bi-calendar-event"></i>
                                 </div>
-                                <h5 class="mb-2">E-Grading</h5>
-                                <p class="text-muted mb-4">Optimized for registrar submission</p>
-                                <div class="d-flex gap-2 justify-content-center">
-                                    <button class="btn btn-danger" onclick="exportEGrading(<?= $classId ?>, 'pdf')">
-                                        <i class="bi bi-download"></i> Export PDF
-                                    </button>
-                                    <button class="btn btn-success" onclick="exportEGrading(<?= $classId ?>, 'xlsx')">
-                                        <i class="bi bi-file-earmark-excel"></i> Export Excel
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-4">
-                        <div class="card h-100">
-                            <div class="card-body text-center py-5">
-                                <div class="stat-icon purple mx-auto mb-3">
-                                    <i class="bi bi-calendar-check"></i>
-                                </div>
-                                <h5 class="mb-2">Attendance Report</h5>
-                                <p class="text-muted mb-4">Student attendance summary with rates</p>
+                                <h5 class="mb-2">Attendance Summary</h5>
+                                <p class="text-muted mb-4">Student attendance with daily breakdown and rates</p>
                                 <div class="d-flex gap-2 justify-content-center">
                                     <button class="btn btn-primary" onclick="exportAttendance(<?= $classId ?>, 'csv')">
                                         <i class="bi bi-download"></i> Export CSV
@@ -155,14 +194,26 @@ if ($classId <= 0) {
                     </div>
                 </div>
                 
+                <!-- Preview Area -->
                 <div class="card fade-in">
-                    <div class="card-header">
+                    <div class="card-header d-flex justify-content-between align-items-center">
                         <span><i class="bi bi-eye me-2"></i>Class Record Preview</span>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary" onclick="previewReport('class_record', <?= $classId ?>)">
+                                <i class="bi bi-table me-1"></i> Class Record
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="previewReport('egrading', <?= $classId ?>)">
+                                <i class="bi bi-send me-1"></i> E-Grading
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="previewReport('grading_sheet', <?= $classId ?>)">
+                                <i class="bi bi-journal-text me-1"></i> Grading Sheet
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body" id="classRecordPreview">
                         <div class="empty-state">
                             <i class="bi bi-file-earmark"></i>
-                            <p>Select an export format to generate preview</p>
+                            <p>Select a report type above to generate preview</p>
                         </div>
                     </div>
                 </div>
@@ -177,12 +228,22 @@ if ($classId <= 0) {
             document.getElementById('sidebarOverlay').classList.toggle('show');
         });
         
-        function exportClassRecord(classId, format) {
-            window.open(`api/index.php?action=generate_report&class_id=${classId}&format=${format}`);
+        function exportReport(type, classId, format) {
+            window.open(`api/index.php?action=generate_${type}_report&class_id=${classId}&format=${format}`);
         }
         
-        function exportEGrading(classId, format) {
-            window.open(`api/index.php?action=export_egrading&class_id=${classId}&format=${format}`);
+        function previewReport(type, classId) {
+            const previewDiv = document.getElementById('classRecordPreview');
+            previewDiv.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div><p class="mt-2">Loading preview...</p></div>';
+            
+            fetch(`api/index.php?action=generate_${type}_report&class_id=${classId}&format=pdf`)
+                .then(response => response.text())
+                .then(html => {
+                    previewDiv.innerHTML = html;
+                })
+                .catch(err => {
+                    previewDiv.innerHTML = '<div class="text-center py-4 text-danger">Error loading preview: ' + err.message + '</div>';
+                });
         }
         
         function exportAttendance(classId, format) {

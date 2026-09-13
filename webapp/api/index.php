@@ -1243,7 +1243,7 @@ try {
             JOIN class_section cs ON gc.class_section_id = cs.id
             JOIN subject s ON cs.subject_id = s.id
             WHERE cs.faculty_id = $faculty_id
-            GROUP BY cs.id ORDER BY cs.created_at DESC LIMIT 10");
+            GROUP BY cs.id, s.code, cs.course_program, cs.year_level, cs.section ORDER BY cs.created_at DESC LIMIT 10");
         $data = $result->fetch_all(MYSQLI_ASSOC);
         foreach ($data as &$row) { $row['class_name'] = $row['code']; }
         echo ResponseAPI::success($data);
@@ -1257,7 +1257,7 @@ try {
             JOIN class_section cs ON ase.class_section_id = cs.id
             JOIN subject s ON cs.subject_id = s.id
             WHERE cs.faculty_id = $faculty_id
-            GROUP BY cs.id ORDER BY cs.created_at DESC LIMIT 8");
+            GROUP BY cs.id, s.code, cs.course_program, cs.year_level, cs.section ORDER BY cs.created_at DESC LIMIT 8");
         $data = $result->fetch_all(MYSQLI_ASSOC);
         foreach ($data as &$row) { $row['class_name'] = $row['code']; }
         echo ResponseAPI::success($data);
@@ -1365,6 +1365,138 @@ try {
             generateAttendanceCSV($class, $students, $sessions);
         }
     }
+    // GE-104 Grading System Endpoints
+    elseif ($action === 'get_component_perfect_scores') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $period = $_GET['period'] ?? 'midterm';
+        
+        $stmt = $db->prepare("SELECT component_type, perfect_score FROM grade_component_perfect_score WHERE class_section_id = ? AND period = ?");
+        $stmt->bind_param("is", $classId, $period);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $scores = [];
+        while ($row = $result->fetch_assoc()) {
+            $scores[$row['component_type']] = floatval($row['perfect_score']);
+        }
+        echo ResponseAPI::success($scores);
+    }
+    elseif ($action === 'save_component_perfect_scores') {
+        $data = json_decode(file_get_contents("php://input"), true);
+        $classId = intval($data['class_id'] ?? 0);
+        $period = $data['period'] ?? 'midterm';
+        $scores = $data['scores'] ?? [];
+        
+        if (!$classId) {
+            echo ResponseAPI::error("Invalid class ID");
+            exit;
+        }
+        
+        $components = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
+        foreach ($components as $component) {
+            $perfectScore = floatval($scores[$component] ?? 0);
+            $stmt = $db->prepare("INSERT INTO grade_component_perfect_score (class_section_id, period, component_type, perfect_score) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE perfect_score = VALUES(perfect_score)");
+            $stmt->bind_param("issd", $classId, $period, $component, $perfectScore);
+            $stmt->execute();
+        }
+        echo ResponseAPI::success([], "Perfect scores saved");
+    }
+    elseif ($action === 'get_class_grades') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        
+        $stmt = $db->prepare("SELECT cs.*, s.code, s.title FROM class_section cs JOIN subject s ON cs.subject_id = s.id WHERE cs.id = ? AND cs.faculty_id = ?");
+        $stmt->bind_param("ii", $classId, $faculty_id);
+        $stmt->execute();
+        $class = $stmt->get_result()->fetch_assoc();
+        
+        if (!$class) {
+            echo ResponseAPI::error("Class not found");
+            exit;
+        }
+        
+        $students = $db->query("SELECT * FROM student WHERE class_section_id = $classId ORDER BY last_name")->fetch_all(MYSQLI_ASSOC);
+        
+        $gradesData = [];
+        foreach ($students as $student) {
+            $grades = GradingHelper::calculateStudentGrades($db, $classId, $student['id']);
+            $gradesData[] = array_merge($student, $grades);
+        }
+        
+        echo ResponseAPI::success([
+            'class' => $class,
+            'grades' => $gradesData
+        ]);
+    }
+    elseif ($action === 'get_student_grade_report') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $studentId = intval($_GET['student_id'] ?? 0);
+        
+        $grades = GradingHelper::calculateStudentGrades($db, $classId, $studentId);
+        
+        // Get student info
+        $stmt = $db->prepare("SELECT * FROM student WHERE id = ?");
+        $stmt->bind_param("i", $studentId);
+        $stmt->execute();
+        $student = $stmt->get_result()->fetch_assoc();
+        
+        echo ResponseAPI::success(array_merge($student ?? [], $grades));
+    }
+    elseif ($action === 'generate_class_record') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $format = $_GET['format'] ?? 'pdf';
+        
+        $class = $db->query("SELECT cs.*, s.code, s.title FROM class_section cs JOIN subject s ON cs.subject_id = s.id WHERE cs.id = $classId")->fetch_assoc();
+        $students = $db->query("SELECT * FROM student WHERE class_section_id = $classId ORDER BY last_name")->fetch_all(MYSQLI_ASSOC);
+        
+        $gradesData = [];
+        foreach ($students as $student) {
+            $grades = GradingHelper::calculateStudentGrades($db, $classId, $student['id']);
+            $gradesData[] = array_merge($student, $grades);
+        }
+        
+        if ($format === 'xlsx' || $format === 'excel') {
+            generateClassRecordExcel($class, $gradesData);
+        } else {
+            generateClassRecordPdf($class, $gradesData);
+        }
+    }
+    elseif ($action === 'generate_egrading_report') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $format = $_GET['format'] ?? 'pdf';
+        
+        $class = $db->query("SELECT cs.*, s.code, s.title FROM class_section cs JOIN subject s ON cs.subject_id = s.id WHERE cs.id = $classId")->fetch_assoc();
+        $students = $db->query("SELECT * FROM student WHERE class_section_id = $classId ORDER BY last_name")->fetch_all(MYSQLI_ASSOC);
+        
+        $gradesData = [];
+        foreach ($students as $student) {
+            $grades = GradingHelper::calculateStudentGrades($db, $classId, $student['id']);
+            $gradesData[] = array_merge($student, $grades);
+        }
+        
+        if ($format === 'xlsx' || $format === 'excel') {
+            generateEGradingExcel($class, $gradesData);
+        } else {
+            generateEGradingPdf($class, $gradesData);
+        }
+    }
+    elseif ($action === 'generate_grading_sheet_report') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $format = $_GET['format'] ?? 'pdf';
+        
+        $class = $db->query("SELECT cs.*, s.code, s.title FROM class_section cs JOIN subject s ON cs.subject_id = s.id WHERE cs.id = $classId")->fetch_assoc();
+        $students = $db->query("SELECT * FROM student WHERE class_section_id = $classId ORDER BY last_name")->fetch_all(MYSQLI_ASSOC);
+        
+        $gradesData = [];
+        foreach ($students as $student) {
+            $grades = GradingHelper::calculateStudentGrades($db, $classId, $student['id']);
+            $gradesData[] = array_merge($student, $grades);
+        }
+        
+        if ($format === 'xlsx' || $format === 'excel') {
+            generateGradingSheetExcel($class, $gradesData);
+        } else {
+            generateGradingSheetPdf($class, $gradesData);
+        }
+    }
     else {
         echo ResponseAPI::error("Invalid action", 404);
     }
@@ -1466,6 +1598,477 @@ function generateAttendanceCSV($class, $students, $sessions) {
 
 function generateAttendanceExcel($class, $students, $sessions) {
     generateAttendanceCSV($class, $students, $sessions);
+}
+
+// ==========================================
+// GE-104 Report Generation Functions
+// ==========================================
+
+function generateClassRecordExcel($class, $gradesData) {
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="ClassRecord_' . $class['code'] . '.csv"');
+    
+    $fp = fopen('php://output', 'w');
+    fprintf($fp, "\xEF\xBB\xBF");
+    
+    fputcsv($fp, ['CLASS RECORD']);
+    fputcsv($fp, ['Course: ' . $class['code'] . ' - ' . $class['title']]);
+    fputcsv($fp, ['Class: ' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section']]);
+    fputcsv($fp, ['AY: ' . $class['academic_year']]);
+    fputcsv($fp, []);
+    
+    // Midterm Detailed
+    fputcsv($fp, ['MIDTERM PERIOD']);
+    $midHeaders = ['No.', 'Student No', 'Last Name', 'First Name', 'MI',
+        'CP1', 'CP2', 'CP3', 'CP4', 'CP Total', 'CP Highest', 'CP Equiv.',
+        'PS1', 'PS Total', 'PS Highest', 'PS Equiv.',
+        'Q1', 'Q2', 'Quiz Total', 'Quiz Highest', 'Quiz Equiv.',
+        'Exam', 'Exam Highest', 'Exam Equiv.',
+        'Midterm Grade'];
+    fputcsv($fp, $midHeaders);
+    
+    foreach ($gradesData as $i => $student) {
+        $mt = $student['midterm']['components'] ?? [];
+        $cp = $mt['class_participation'] ?? [];
+        $ps = $mt['problem_set'] ?? [];
+        $quiz = $mt['quizzes'] ?? [];
+        $exam = $mt['periodical_exam'] ?? [];
+        
+        $cpItems = $cp['items'] ?? [];
+        $psItems = $ps['items'] ?? [];
+        $quizItems = $quiz['items'] ?? [];
+        $examItems = $exam['items'] ?? [];
+        
+        $cpTotal = $cp['raw_total'] ?? 0;
+        $cpMax = $cp['max_total'] ?? 0;
+        $psTotal = $ps['raw_total'] ?? 0;
+        $psMax = $ps['max_total'] ?? 0;
+        $quizTotal = $quiz['raw_total'] ?? 0;
+        $quizMax = $quiz['max_total'] ?? 0;
+        $examTotal = $exam['raw_total'] ?? 0;
+        $examMax = $exam['max_total'] ?? 0;
+        
+        $cpHighest = $cp['perfect_score'] ?? $cpMax;
+        $psHighest = $ps['perfect_score'] ?? $psMax;
+        $quizHighest = $quiz['perfect_score'] ?? $quizMax;
+        $examHighest = $exam['perfect_score'] ?? $examMax;
+        
+        $cpEquiv = GradingHelper::calculateComponentScore($cpTotal, $cpHighest);
+        $psEquiv = GradingHelper::calculateComponentScore($psTotal, $psHighest);
+        $quizEquiv = GradingHelper::calculateComponentScore($quizTotal, $quizHighest);
+        $examEquiv = GradingHelper::calculateComponentScore($examTotal, $examHighest);
+        
+        fputcsv($fp, [
+            $i + 1,
+            $student['student_no'],
+            $student['last_name'],
+            $student['first_name'],
+            $student['middle_initial'],
+            $cpItems[0]['raw_score'] ?? '',
+            $cpItems[1]['raw_score'] ?? '',
+            $cpItems[2]['raw_score'] ?? '',
+            $cpItems[3]['raw_score'] ?? '',
+            $cpTotal,
+            $cpHighest,
+            round($cpEquiv, 2),
+            $psItems[0]['raw_score'] ?? '',
+            $psTotal,
+            $psHighest,
+            round($psEquiv, 2),
+            $quizItems[0]['raw_score'] ?? '',
+            $quizItems[1]['raw_score'] ?? '',
+            $quizTotal,
+            $quizHighest,
+            round($quizEquiv, 2),
+            $examItems[0]['raw_score'] ?? '',
+            $examHighest,
+            round($examEquiv, 2),
+            $student['midterm']['grade']
+        ]);
+    }
+    
+    fputcsv($fp, []);
+    
+    // Final Detailed
+    fputcsv($fp, ['FINAL PERIOD']);
+    $finHeaders = ['No.', 'Student No', 'Last Name', 'First Name', 'MI',
+        'CP1', 'CP2', 'CP3', 'CP4', 'CP Total', 'CP Highest', 'CP Equiv.',
+        'PS1', 'PS Total', 'PS Highest', 'PS Equiv.',
+        'Q1', 'Q2', 'Quiz Total', 'Quiz Highest', 'Quiz Equiv.',
+        'Exam', 'Exam Highest', 'Exam Equiv.',
+        'Final Grade'];
+    fputcsv($fp, $finHeaders);
+    
+    foreach ($gradesData as $i => $student) {
+        $fn = $student['final']['components'] ?? [];
+        $cp = $fn['class_participation'] ?? [];
+        $ps = $fn['problem_set'] ?? [];
+        $quiz = $fn['quizzes'] ?? [];
+        $exam = $fn['periodical_exam'] ?? [];
+        
+        $cpItems = $cp['items'] ?? [];
+        $psItems = $ps['items'] ?? [];
+        $quizItems = $quiz['items'] ?? [];
+        $examItems = $exam['items'] ?? [];
+        
+        $cpTotal = $cp['raw_total'] ?? 0;
+        $cpMax = $cp['max_total'] ?? 0;
+        $psTotal = $ps['raw_total'] ?? 0;
+        $psMax = $ps['max_total'] ?? 0;
+        $quizTotal = $quiz['raw_total'] ?? 0;
+        $quizMax = $quiz['max_total'] ?? 0;
+        $examTotal = $exam['raw_total'] ?? 0;
+        $examMax = $exam['max_total'] ?? 0;
+        
+        $cpHighest = $cp['perfect_score'] ?? $cpMax;
+        $psHighest = $ps['perfect_score'] ?? $psMax;
+        $quizHighest = $quiz['perfect_score'] ?? $quizMax;
+        $examHighest = $exam['perfect_score'] ?? $examMax;
+        
+        $cpEquiv = GradingHelper::calculateComponentScore($cpTotal, $cpHighest);
+        $psEquiv = GradingHelper::calculateComponentScore($psTotal, $psHighest);
+        $quizEquiv = GradingHelper::calculateComponentScore($quizTotal, $quizHighest);
+        $examEquiv = GradingHelper::calculateComponentScore($examTotal, $examHighest);
+        
+        fputcsv($fp, [
+            $i + 1,
+            $student['student_no'],
+            $student['last_name'],
+            $student['first_name'],
+            $student['middle_initial'],
+            $cpItems[0]['raw_score'] ?? '',
+            $cpItems[1]['raw_score'] ?? '',
+            $cpItems[2]['raw_score'] ?? '',
+            $cpItems[3]['raw_score'] ?? '',
+            $cpTotal,
+            $cpHighest,
+            round($cpEquiv, 2),
+            $psItems[0]['raw_score'] ?? '',
+            $psTotal,
+            $psHighest,
+            round($psEquiv, 2),
+            $quizItems[0]['raw_score'] ?? '',
+            $quizItems[1]['raw_score'] ?? '',
+            $quizTotal,
+            $quizHighest,
+            round($quizEquiv, 2),
+            $examItems[0]['raw_score'] ?? '',
+            $examHighest,
+            round($examEquiv, 2),
+            $student['final']['grade']
+        ]);
+    }
+}
+
+function generateClassRecordPdf($class, $gradesData) {
+    echo '<html><head><meta charset="utf-8"><title>Class Record - ' . $class['code'] . '</title>';
+    echo '<style>
+        body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 30px; }
+        th, td { border: 1px solid #000; padding: 4px; text-align: center; font-size: 10px; }
+        th { background: #f0f0f0; font-weight: bold; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h2 { margin: 5px 0; }
+        .section-title { background: #e0e0e0; font-weight: bold; }
+        .sub-header { background: #f5f5f5; font-size: 9px; }
+    </style></head><body>';
+    
+    echo '<div class="header">';
+    echo '<h2>CLASS RECORD</h2>';
+    echo '<p>' . $class['code'] . ' - ' . $class['title'] . '</p>';
+    echo '<p>' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section'] . ' | AY ' . $class['academic_year'] . '</p>';
+    echo '</div>';
+    
+    // Midterm
+    echo '<table>';
+    echo '<tr class="section-title"><th colspan="24">MIDTERM PERIOD</th></tr>';
+    echo '<tr class="sub-header"><th rowspan="2">No.</th><th rowspan="2">Student No</th><th rowspan="2">Last Name</th><th rowspan="2">First Name</th><th rowspan="2">MI</th>';
+    echo '<th colspan="4">Class Participation</th><th>Total</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th>PS1</th><th>Total</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th>Q1</th><th>Q2</th><th>Total</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th>Exam</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th rowspan="2">Midterm Grade</th></tr>';
+    echo '<tr class="sub-header"><th>CP1</th><th>CP2</th><th>CP3</th><th>CP4</th></tr>';
+    
+    foreach ($gradesData as $i => $student) {
+        $mt = $student['midterm']['components'] ?? [];
+        $cp = $mt['class_participation'] ?? [];
+        $ps = $mt['problem_set'] ?? [];
+        $quiz = $mt['quizzes'] ?? [];
+        $exam = $mt['periodical_exam'] ?? [];
+        
+        $cpItems = $cp['items'] ?? [];
+        $psItems = $ps['items'] ?? [];
+        $quizItems = $quiz['items'] ?? [];
+        $examItems = $exam['items'] ?? [];
+        
+        echo '<tr>';
+        echo '<td>' . ($i + 1) . '</td>';
+        echo '<td>' . $student['student_no'] . '</td>';
+        echo '<td>' . $student['last_name'] . '</td>';
+        echo '<td>' . $student['first_name'] . '</td>';
+        echo '<td>' . $student['middle_initial'] . '</td>';
+        
+        for ($j = 0; $j < 4; $j++) {
+            echo '<td>' . ($cpItems[$j]['raw_score'] ?? '') . '</td>';
+        }
+        $cpTotal = $cp['raw_total'] ?? 0;
+        $cpHighest = $cp['perfect_score'] ?? ($cp['max_total'] ?? 0);
+        $cpEquiv = GradingHelper::calculateComponentScore($cpTotal, $cpHighest);
+        echo '<td>' . $cpTotal . '</td><td>' . $cpHighest . '</td><td>' . round($cpEquiv, 2) . '</td>';
+        
+        echo '<td>' . ($psItems[0]['raw_score'] ?? '') . '</td>';
+        $psTotal = $ps['raw_total'] ?? 0;
+        $psHighest = $ps['perfect_score'] ?? ($ps['max_total'] ?? 0);
+        $psEquiv = GradingHelper::calculateComponentScore($psTotal, $psHighest);
+        echo '<td>' . $psTotal . '</td><td>' . $psHighest . '</td><td>' . round($psEquiv, 2) . '</td>';
+        
+        echo '<td>' . ($quizItems[0]['raw_score'] ?? '') . '</td>';
+        echo '<td>' . ($quizItems[1]['raw_score'] ?? '') . '</td>';
+        $quizTotal = $quiz['raw_total'] ?? 0;
+        $quizHighest = $quiz['perfect_score'] ?? ($quiz['max_total'] ?? 0);
+        $quizEquiv = GradingHelper::calculateComponentScore($quizTotal, $quizHighest);
+        echo '<td>' . $quizTotal . '</td><td>' . $quizHighest . '</td><td>' . round($quizEquiv, 2) . '</td>';
+        
+        echo '<td>' . ($examItems[0]['raw_score'] ?? '') . '</td>';
+        $examHighest = $exam['perfect_score'] ?? ($exam['max_total'] ?? 0);
+        $examEquiv = GradingHelper::calculateComponentScore($examTotal ?? 0, $examHighest);
+        echo '<td>' . $examHighest . '</td><td>' . round($examEquiv, 2) . '</td>';
+        
+        echo '<td><strong>' . $student['midterm']['grade'] . '</strong></td>';
+        echo '</tr>';
+    }
+    echo '</table>';
+    
+    // Final
+    echo '<table>';
+    echo '<tr class="section-title"><th colspan="24">FINAL PERIOD</th></tr>';
+    echo '<tr class="sub-header"><th rowspan="2">No.</th><th rowspan="2">Student No</th><th rowspan="2">Last Name</th><th rowspan="2">First Name</th><th rowspan="2">MI</th>';
+    echo '<th colspan="4">Class Participation</th><th>Total</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th>PS1</th><th>Total</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th>Q1</th><th>Q2</th><th>Total</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th>Exam</th><th>Highest</th><th>Equiv.</th>';
+    echo '<th rowspan="2">Final Grade</th></tr>';
+    echo '<tr class="sub-header"><th>CP1</th><th>CP2</th><th>CP3</th><th>CP4</th></tr>';
+    
+    foreach ($gradesData as $i => $student) {
+        $fn = $student['final']['components'] ?? [];
+        $cp = $fn['class_participation'] ?? [];
+        $ps = $fn['problem_set'] ?? [];
+        $quiz = $fn['quizzes'] ?? [];
+        $exam = $fn['periodical_exam'] ?? [];
+        
+        $cpItems = $cp['items'] ?? [];
+        $psItems = $ps['items'] ?? [];
+        $quizItems = $quiz['items'] ?? [];
+        $examItems = $exam['items'] ?? [];
+        
+        echo '<tr>';
+        echo '<td>' . ($i + 1) . '</td>';
+        echo '<td>' . $student['student_no'] . '</td>';
+        echo '<td>' . $student['last_name'] . '</td>';
+        echo '<td>' . $student['first_name'] . '</td>';
+        echo '<td>' . $student['middle_initial'] . '</td>';
+        
+        for ($j = 0; $j < 4; $j++) {
+            echo '<td>' . ($cpItems[$j]['raw_score'] ?? '') . '</td>';
+        }
+        $cpTotal = $cp['raw_total'] ?? 0;
+        $cpHighest = $cp['perfect_score'] ?? ($cp['max_total'] ?? 0);
+        $cpEquiv = GradingHelper::calculateComponentScore($cpTotal, $cpHighest);
+        echo '<td>' . $cpTotal . '</td><td>' . $cpHighest . '</td><td>' . round($cpEquiv, 2) . '</td>';
+        
+        echo '<td>' . ($psItems[0]['raw_score'] ?? '') . '</td>';
+        $psTotal = $ps['raw_total'] ?? 0;
+        $psHighest = $ps['perfect_score'] ?? ($ps['max_total'] ?? 0);
+        $psEquiv = GradingHelper::calculateComponentScore($psTotal, $psHighest);
+        echo '<td>' . $psTotal . '</td><td>' . $psHighest . '</td><td>' . round($psEquiv, 2) . '</td>';
+        
+        echo '<td>' . ($quizItems[0]['raw_score'] ?? '') . '</td>';
+        echo '<td>' . ($quizItems[1]['raw_score'] ?? '') . '</td>';
+        $quizTotal = $quiz['raw_total'] ?? 0;
+        $quizHighest = $quiz['perfect_score'] ?? ($quiz['max_total'] ?? 0);
+        $quizEquiv = GradingHelper::calculateComponentScore($quizTotal, $quizHighest);
+        echo '<td>' . $quizTotal . '</td><td>' . $quizHighest . '</td><td>' . round($quizEquiv, 2) . '</td>';
+        
+        echo '<td>' . ($examItems[0]['raw_score'] ?? '') . '</td>';
+        $examHighest = $exam['perfect_score'] ?? ($exam['max_total'] ?? 0);
+        $examEquiv = GradingHelper::calculateComponentScore($examTotal ?? 0, $examHighest);
+        echo '<td>' . $examHighest . '</td><td>' . round($examEquiv, 2) . '</td>';
+        
+        echo '<td><strong>' . $student['final']['grade'] . '</strong></td>';
+        echo '</tr>';
+    }
+    echo '</table>';
+    echo '</body></html>';
+}
+
+function generateEGradingExcel($class, $gradesData) {
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="EGrading_' . $class['code'] . '.csv"');
+    
+    $fp = fopen('php://output', 'w');
+    fprintf($fp, "\xEF\xBB\xBF");
+    
+    fputcsv($fp, ['E-GRADING SUBMISSION']);
+    fputcsv($fp, ['Course: ' . $class['code'] . ' - ' . $class['title']]);
+    fputcsv($fp, ['Class: ' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section']]);
+    fputcsv($fp, ['AY: ' . $class['academic_year']]);
+    fputcsv($fp, []);
+    
+    $headers = ['No.', 'Student No', 'Name (Last, First MI)', 'Midterm Rating', 'Midterm Remarks', 'Final Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks'];
+    fputcsv($fp, $headers);
+    
+    foreach ($gradesData as $i => $student) {
+        $name = $student['last_name'] . ', ' . $student['first_name'] . ' ' . $student['middle_initial'] . '.';
+        $midtermRating = round($student['midterm']['grade']);
+        $midtermRemarks = $student['midterm']['remarks'];
+        $finalRating = round($student['final']['grade']);
+        $finalGrade = $student['overall']['grade_point'];
+        $unitCredit = 3; // Default
+        $remarks = $student['overall']['remarks'];
+        
+        fputcsv($fp, [
+            $i + 1,
+            $student['student_no'],
+            $name,
+            $midtermRating,
+            $midtermRemarks,
+            $finalRating,
+            $finalGrade,
+            $unitCredit,
+            $remarks
+        ]);
+    }
+}
+
+function generateEGradingPdf($class, $gradesData) {
+    echo '<html><head><meta charset="utf-8"><title>E-Grading - ' . $class['code'] . '</title>';
+    echo '<style>
+        body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #000; padding: 6px; text-align: center; font-size: 10px; }
+        th { background: #f0f0f0; font-weight: bold; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h2 { margin: 5px 0; }
+    </style></head><body>';
+    
+    echo '<div class="header">';
+    echo '<h2>E-GRADING SUBMISSION</h2>';
+    echo '<p>' . $class['code'] . ' - ' . $class['title'] . '</p>';
+    echo '<p>' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section'] . ' | AY ' . $class['academic_year'] . '</p>';
+    echo '</div>';
+    
+    echo '<table>';
+    echo '<tr><th>No.</th><th>Student No</th><th>Name (Last, First MI)</th><th>Midterm Rating</th><th>Midterm Remarks</th><th>Final Numerical Rating</th><th>Final Grade</th><th>Unit Credit</th><th>Remarks</th></tr>';
+    
+    foreach ($gradesData as $i => $student) {
+        $name = $student['last_name'] . ', ' . $student['first_name'] . ' ' . $student['middle_initial'] . '.';
+        $midtermRating = round($student['midterm']['grade']);
+        $midtermRemarks = $student['midterm']['remarks'];
+        $finalRating = round($student['final']['grade']);
+        $finalGrade = $student['overall']['grade_point'];
+        $unitCredit = 3;
+        $remarks = $student['overall']['remarks'];
+        
+        echo '<tr>';
+        echo '<td>' . ($i + 1) . '</td>';
+        echo '<td>' . $student['student_no'] . '</td>';
+        echo '<td style="text-align:left;">' . $name . '</td>';
+        echo '<td>' . $midtermRating . '</td>';
+        echo '<td>' . $midtermRemarks . '</td>';
+        echo '<td>' . $finalRating . '</td>';
+        echo '<td>' . $finalGrade . '</td>';
+        echo '<td>' . $unitCredit . '</td>';
+        echo '<td>' . $remarks . '</td>';
+        echo '</tr>';
+    }
+    echo '</table>';
+    echo '</body></html>';
+}
+
+function generateGradingSheetExcel($class, $gradesData) {
+    header('Content-Type: text/csv');
+    header('Content-Disposition: attachment; filename="GradingSheet_' . $class['code'] . '.csv"');
+    
+    $fp = fopen('php://output', 'w');
+    fprintf($fp, "\xEF\xBB\xBF");
+    
+    fputcsv($fp, ['GRADING SHEET']);
+    fputcsv($fp, ['Course: ' . $class['code'] . ' - ' . $class['title']]);
+    fputcsv($fp, ['Class: ' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section']]);
+    fputcsv($fp, ['AY: ' . $class['academic_year']]);
+    fputcsv($fp, []);
+    
+    $headers = ['No.', 'Student No', 'Name (Last, First MI)', 'Midterm Rating', 'Midterm Remarks', 'Final Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks'];
+    fputcsv($fp, $headers);
+    
+    foreach ($gradesData as $i => $student) {
+        $name = $student['last_name'] . ', ' . $student['first_name'] . ' ' . $student['middle_initial'] . '.';
+        $midtermRating = round($student['midterm']['grade']);
+        $midtermRemarks = $student['midterm']['remarks'];
+        $finalRating = round($student['final']['grade']);
+        $finalGrade = $student['overall']['grade_point'];
+        $unitCredit = 3;
+        $remarks = $student['overall']['remarks'];
+        
+        fputcsv($fp, [
+            $i + 1,
+            $student['student_no'],
+            $name,
+            $midtermRating,
+            $midtermRemarks,
+            $finalRating,
+            $finalGrade,
+            $unitCredit,
+            $remarks
+        ]);
+    }
+}
+
+function generateGradingSheetPdf($class, $gradesData) {
+    echo '<html><head><meta charset="utf-8"><title>Grading Sheet - ' . $class['code'] . '</title>';
+    echo '<style>
+        body { font-family: Arial, sans-serif; font-size: 11px; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #000; padding: 6px; text-align: center; font-size: 10px; }
+        th { background: #f0f0f0; font-weight: bold; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header h2 { margin: 5px 0; }
+    </style></head><body>';
+    
+    echo '<div class="header">';
+    echo '<h2>GRADING SHEET</h2>';
+    echo '<p>' . $class['code'] . ' - ' . $class['title'] . '</p>';
+    echo '<p>' . $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section'] . ' | AY ' . $class['academic_year'] . '</p>';
+    echo '</div>';
+    
+    echo '<table>';
+    echo '<tr><th>No.</th><th>Student No</th><th>Name (Last, First MI)</th><th>Midterm Rating</th><th>Midterm Remarks</th><th>Final Numerical Rating</th><th>Final Grade</th><th>Unit Credit</th><th>Remarks</th></tr>';
+    
+    foreach ($gradesData as $i => $student) {
+        $name = $student['last_name'] . ', ' . $student['first_name'] . ' ' . $student['middle_initial'] . '.';
+        $midtermRating = round($student['midterm']['grade']);
+        $midtermRemarks = $student['midterm']['remarks'];
+        $finalRating = round($student['final']['grade']);
+        $finalGrade = $student['overall']['grade_point'];
+        $unitCredit = 3;
+        $remarks = $student['overall']['remarks'];
+        
+        echo '<tr>';
+        echo '<td>' . ($i + 1) . '</td>';
+        echo '<td>' . $student['student_no'] . '</td>';
+        echo '<td style="text-align:left;">' . $name . '</td>';
+        echo '<td>' . $midtermRating . '</td>';
+        echo '<td>' . $midtermRemarks . '</td>';
+        echo '<td>' . $finalRating . '</td>';
+        echo '<td>' . $finalGrade . '</td>';
+        echo '<td>' . $unitCredit . '</td>';
+        echo '<td>' . $remarks . '</td>';
+        echo '</tr>';
+    }
+    echo '</table>';
+    echo '</body></html>';
 }
 
 ?>

@@ -24,7 +24,7 @@ if ($classId > 0) {
     <title><?= $classId > 0 ? 'Grading Sheet - ' . APP_NAME : 'Select a Class - ' . APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=3">
+    <link rel="stylesheet" href="assets/css/style.css?v=6">
 </head>
 <body>
     <?php include 'includes/header.php'; ?>
@@ -39,9 +39,20 @@ if ($classId > 0) {
             </div>
             <div class="topbar-right">
                 <?php if ($classId > 0): ?>
-                <a href="index.php?page=reports&id=<?= $classId ?>" class="btn btn-secondary">
-                    <i class="bi bi-file-earmark-arrow-down"></i> Reports
-                </a>
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="showCategoryManager()">
+                        <i class="bi bi-gear me-1"></i> Manage Categories
+                    </button>
+                    <span class="badge bg-secondary period-badge" data-period="midterm">
+                        Midterm (40%)
+                    </span>
+                    <span class="badge bg-primary period-badge" data-period="final">
+                        Final (60%)
+                    </span>
+                    <a href="index.php?page=reports&id=<?= $classId ?>" class="btn btn-secondary">
+                        <i class="bi bi-file-earmark-arrow-down"></i> Reports
+                    </a>
+                </div>
                 <?php endif; ?>
             </div>
         </div>
@@ -60,19 +71,37 @@ if ($classId > 0) {
                 </div>
             </div>
             
-            <!-- Category Management -->
-            <div class="card border-info mb-3 fade-in">
-                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Grade Categories</h5>
-                    <button class="btn btn-sm btn-light" onclick="showAddCategoryModal('<?= $classId ?>', '<?= $period ?>')">
-                        <i class="bi bi-plus"></i> Add Category
-                    </button>
-                </div>
-                <div class="card-body">
-                    <div id="categoriesContainer" class="d-flex flex-wrap gap-2">
-                        <p class="text-muted">Loading categories...</p>
+            <!-- Perfect Scores Setup - Collapsible Category -->
+            <div class="card border-info mb-3 fade-in perfect-score-category" id="perfectScoreCategory">
+                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center category-header" onclick="togglePerfectScoreCategory()" style="cursor: pointer;">
+                    <h5 class="mb-0"><i class="bi bi-trophy me-2"></i>Perfect Scores (Highest Possible) - <?= ucfirst($period) ?></h5>
+                    <div class="d-flex align-items-center gap-2">
+                        <i class="bi bi-chevron-down" id="perfectScoreChevron" style="font-size: 1.2rem; transition: transform 0.3s ease;"></i>
+                        <button class="btn btn-sm btn-light" onclick="event.stopPropagation(); showPerfectScoreModal()">
+                            <i class="bi bi-pencil-square"></i> Edit
+                        </button>
                     </div>
-                    <small class="text-muted">Total Weight: <strong id="totalWeight">0</strong>%</small>
+                </div>
+                <div class="card-body category-body" id="perfectScoreBody">
+                    <div class="row g-3" id="perfectScoresDisplay">
+                        <div class="col-md-3">
+                            <label class="form-label">Class Participation</label>
+                            <input type="number" class="form-control perfect-score-input" data-component="class_participation" placeholder="Enter perfect score" readonly>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Problem Set</label>
+                            <input type="number" class="form-control perfect-score-input" data-component="problem_set" placeholder="Enter perfect score" readonly>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Quizzes</label>
+                            <input type="number" class="form-control perfect-score-input" data-component="quizzes" placeholder="Enter perfect score" readonly>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Periodical Exam</label>
+                            <input type="number" class="form-control perfect-score-input" data-component="periodical_exam" placeholder="Enter perfect score" readonly>
+                        </div>
+                    </div>
+                    <small class="text-muted">These are the highest possible scores for each component. They are used in the transmutation formula: (raw/perfect)*50+50</small>
                 </div>
             </div>
             
@@ -96,17 +125,15 @@ if ($classId > 0) {
                 </li>
             </ul>
             
-            <!-- Grading Table -->
+            <!-- Grading Table Container -->
             <div class="card fade-in">
                 <div class="card-body p-0">
                     <div class="grading-scroll-container">
                         <div class="grading-table-wrapper">
-                            <table class="table grading-table" id="gradingTable">
-                                <thead>
-                                    <tr><th>Student</th></tr>
-                                </thead>
+                            <table class="table grading-table-excel" id="gradingTable">
+                                <thead id="gradingHead"></thead>
                                 <tbody id="gradingBody">
-                                    <tr><td colspan="15" class="text-center py-3">Loading...</td></tr>
+                                    <tr><td colspan="50" class="text-center py-3">Loading...</td></tr>
                                 </tbody>
                             </table>
                         </div>
@@ -146,52 +173,185 @@ if ($classId > 0) {
             </div>
             <?php endif; ?>
         </div>
-    </div>
-    
-    <div class="modal fade" id="categoryModal" tabindex="-1">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="categoryModalTitle">Add Grade Category</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <form id="categoryForm">
-                        <div class="form-group">
-                            <label for="categoryName" class="form-label">Category Name *</label>
-                            <input type="text" class="form-control" id="categoryName" placeholder="e.g., Quizzes, Midterm Exam, Project" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="categoryWeight" class="form-label">Weight Percentage (%) *</label>
-                            <input type="number" class="form-control" id="categoryWeight" min="1" max="100" value="20" required>
-                            <small class="form-text">Current total weight: <span id="currentTotal">0</span>%</small>
-                        </div>
-                        <div class="form-group">
-                            <label for="categoryPeriod" class="form-label">Period *</label>
-                            <select id="categoryPeriod" class="form-select">
-                                <option value="midterm">Midterm</option>
-                                <option value="final">Final</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="categoryMaxScore" class="form-label">Max Score *</label>
-                            <input type="number" class="form-control" id="categoryMaxScore" min="1" max="1000" value="100" required>
-                        </div>
-                        <div class="alert alert-info" id="weightWarning" style="display: none;">
-                            <strong>Note:</strong> Total weight after adding will be <span id="newTotal">0</span>%. Make sure it totals 100% for the period.
-                        </div>
-                    </form>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-primary" onclick="saveCategory()">Save Category</button>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <script src="assets/vendor/bootstrap.bundle.min.js"></script>
-    <script src="assets/js/grading.js"></script>
+</div>
+     
+     <!-- Category Manager Modal -->
+     <div class="modal fade" id="categoryManagerModal" tabindex="-1" aria-hidden="true">
+         <div class="modal-dialog modal-xl modal-dialog-scrollable">
+             <div class="modal-content">
+                 <div class="modal-header">
+                     <h5 class="modal-title"><i class="bi bi-gear me-2"></i>Manage Categories & Items - <span id="catMgrPeriodLabel"><?= ucfirst($period) ?></span></h5>
+                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                 </div>
+                 <div class="modal-body">
+                     <div class="row">
+                         <div class="col-md-4">
+                             <div class="card">
+                                 <div class="card-header d-flex justify-content-between align-items-center">
+                                     <h6 class="mb-0">Categories (<?= ucfirst($period) ?>)</h6>
+                                     <button class="btn btn-sm btn-primary" onclick="showAddCategoryModal()">
+                                         <i class="bi bi-plus"></i> Add
+                                     </button>
+                                 </div>
+                                 <div class="card-body p-0">
+                                     <ul class="list-group list-group-flush" id="categoryList">
+                                         <li class="list-group-item text-center text-muted py-4">Loading...</li>
+                                     </ul>
+                                 </div>
+                             </div>
+                         </div>
+                         <div class="col-md-8">
+                             <div class="card">
+                                 <div class="card-header d-flex justify-content-between align-items-center">
+                                     <h6 class="mb-0" id="selectedCategoryTitle">Grade Items</h6>
+                                     <button class="btn btn-sm btn-success" onclick="showAddItemModal()" id="addItemBtn" style="display:none;">
+                                         <i class="bi bi-plus"></i> Add Item
+                                     </button>
+                                 </div>
+                                 <div class="card-body p-0">
+                                     <div class="table-responsive">
+                                         <table class="table table-sm table-hover mb-0" id="itemsTable">
+                                             <thead class="table-light">
+                                                 <tr>
+                                                     <th style="width: 40px;">#</th>
+                                                     <th>Label</th>
+                                                     <th style="width: 100px;">Max Score</th>
+                                                     <th style="width: 100px;">Sort</th>
+                                                     <th style="width: 100px;">Actions</th>
+                                                 </tr>
+                                             </thead>
+                                             <tbody>
+                                                 <tr><td colspan="5" class="text-center text-muted py-4">Select a category to manage items</td></tr>
+                                             </tbody>
+                                         </table>
+                                     </div>
+                                 </div>
+                             </div>
+                         </div>
+                     </div>
+                 </div>
+                 <div class="modal-footer">
+                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                 </div>
+             </div>
+         </div>
+     </div>
+
+     <!-- Add/Edit Category Modal -->
+     <div class="modal fade" id="categoryModal" tabindex="-1" aria-hidden="true">
+         <div class="modal-dialog">
+             <div class="modal-content">
+                 <div class="modal-header">
+                     <h5 class="modal-title" id="categoryModalTitle">Add Category</h5>
+                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                 </div>
+                 <div class="modal-body">
+                     <form id="categoryForm">
+                         <input type="hidden" id="categoryId" name="id">
+                         <input type="hidden" id="categoryPeriod" name="period" value="<?= $period ?>">
+                         <input type="hidden" id="categoryClassId" name="class_id" value="<?= $classId ?>">
+                         <div class="mb-3">
+                             <label class="form-label">Category Name</label>
+                             <input type="text" class="form-control" id="categoryName" name="name" required placeholder="e.g., Class Participation">
+                         </div>
+                         <div class="row g-3">
+                             <div class="col-md-6">
+                                 <label class="form-label">Weight (%)</label>
+                                 <input type="number" class="form-control" id="categoryWeight" name="weight_percent" min="0" max="100" step="0.01" required>
+                             </div>
+                             <div class="col-md-6">
+                                 <label class="form-label">Sort Order</label>
+                                 <input type="number" class="form-control" id="categorySort" name="sort_order" min="0" value="0">
+                             </div>
+                         </div>
+                     </form>
+                 </div>
+                 <div class="modal-footer">
+                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                     <button type="button" class="btn btn-primary" onclick="saveCategory()">Save Category</button>
+                 </div>
+             </div>
+         </div>
+     </div>
+
+     <!-- Add/Edit Grade Item Modal -->
+     <div class="modal fade" id="gradeItemModal" tabindex="-1" aria-hidden="true">
+         <div class="modal-dialog">
+             <div class="modal-content">
+                 <div class="modal-header">
+                     <h5 class="modal-title" id="gradeItemModalTitle">Add Grade Item</h5>
+                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                 </div>
+                 <div class="modal-body">
+                     <form id="gradeItemForm">
+                         <input type="hidden" id="gradeItemId" name="id">
+                         <input type="hidden" id="gradeItemCategoryId" name="category_id">
+                         <div class="mb-3">
+                             <label class="form-label">Item Label</label>
+                             <input type="text" class="form-control" id="gradeItemLabel" name="label" required placeholder="e.g., Quiz 1">
+                         </div>
+                         <div class="row g-3">
+                             <div class="col-md-6">
+                                 <label class="form-label">Max Score</label>
+                                 <input type="number" class="form-control" id="gradeItemMaxScore" name="max_score" min="1" step="1" required>
+                             </div>
+                             <div class="col-md-6">
+                                 <label class="form-label">Sort Order</label>
+                                 <input type="number" class="form-control" id="gradeItemSort" name="sort_order" min="0" value="0">
+                             </div>
+                         </div>
+                     </form>
+                 </div>
+                 <div class="modal-footer">
+                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                     <button type="button" class="btn btn-primary" onclick="saveGradeItem()">Save Item</button>
+                 </div>
+             </div>
+         </div>
+     </div>
+
+     <!-- Perfect Score Modal -->
+     <div class="modal fade" id="perfectScoreModal" tabindex="-1">
+         <div class="modal-dialog">
+             <div class="modal-content">
+                 <div class="modal-header">
+                     <h5 class="modal-title">Edit Perfect Scores - <span id="modalPeriodLabel"><?= ucfirst($period) ?></span></h5>
+                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                 </div>
+                 <div class="modal-body">
+                     <form id="perfectScoreForm">
+                         <input type="hidden" id="perfectScoreClassId" value="<?= $classId ?>">
+                         <input type="hidden" id="perfectScorePeriod" value="<?= $period ?>">
+                         <div class="row g-3">
+                             <div class="col-md-6">
+                                 <label class="form-label">Class Participation <small class="text-muted">(4 items for final, 2 for midterm)</small></label>
+                                 <input type="number" class="form-control" id="ps_class_participation" min="1" step="1" placeholder="e.g., 100" required>
+                             </div>
+                             <div class="col-md-6">
+                                 <label class="form-label">Problem Set</label>
+                                 <input type="number" class="form-control" id="ps_problem_set" min="1" step="1" placeholder="e.g., 50" required>
+                             </div>
+                             <div class="col-md-6">
+                                 <label class="form-label">Quizzes <small class="text-muted">(2 items)</small></label>
+                                 <input type="number" class="form-control" id="ps_quizzes" min="1" step="1" placeholder="e.g., 50" required>
+                             </div>
+                             <div class="col-md-6">
+                                 <label class="form-label">Periodical Exam</label>
+                                 <input type="number" class="form-control" id="ps_periodical_exam" min="1" step="1" placeholder="e.g., 100" required>
+                             </div>
+                         </div>
+                     </form>
+                 </div>
+                 <div class="modal-footer">
+                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                     <button type="button" class="btn btn-primary" onclick="savePerfectScores()">Save Perfect Scores</button>
+                 </div>
+             </div>
+         </div>
+     </div>
+
+     <script src="assets/vendor/bootstrap.bundle.min.js"></script>
+     <script src="assets/js/grading.js"></script>
     <?php if ($classId > 0): ?>
     <script>
         document.getElementById('mobileToggle')?.addEventListener('click', function() {
@@ -202,13 +362,13 @@ if ($classId > 0) {
         const classId = <?= $classId ?>;
         const period = '<?= $period ?>';
         loadGradingSheet(classId, period);
-        loadCategoriesForDisplay(classId, period);
+        loadPerfectScores(classId, period);
         
         document.querySelectorAll('#periodTabs a').forEach(link => {
             link.addEventListener('click', function(e) {
                 const newPeriod = this.getAttribute('href').includes('period=') ? 
                     this.getAttribute('href').split('period=')[1] : 'midterm';
-                loadCategoriesForDisplay(classId, newPeriod);
+                loadPerfectScores(classId, newPeriod);
             });
         });
 
@@ -278,6 +438,3 @@ if ($classId > 0) {
     <?php endif; ?>
 </body>
 </html>
-
-
-

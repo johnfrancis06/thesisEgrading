@@ -1,464 +1,541 @@
-// Grading Sheet Functions
-function getGradeStorageKey(classId, period) {
-    return `grading_grades_${classId}_${period}`;
-}
-
-function saveGradeToLocalStorage(classId, period, gradeItemId, studentId, score) {
-    const key = getGradeStorageKey(classId, period);
-    let grades = {};
-    try {
-        const existing = localStorage.getItem(key);
-        if (existing) grades = JSON.parse(existing);
-    } catch (e) {}
-    const itemKey = `${gradeItemId}_${studentId}`;
-    grades[itemKey] = score;
-    localStorage.setItem(key, JSON.stringify(grades));
-}
-
-function getLocalStorageGrades(classId, period) {
-    const key = getGradeStorageKey(classId, period);
-    try {
-        const existing = localStorage.getItem(key);
-        return existing ? JSON.parse(existing) : {};
-    } catch (e) {
-        return {};
-    }
-}
-
-function clearLocalStorageGrades(classId, period) {
-    const key = getGradeStorageKey(classId, period);
-    localStorage.removeItem(key);
-}
+// Grading Sheet Functions - GE-104 Exact Excel Match
 
 async function loadGradingSheet(classId, period) {
     try {
-        const resp = await fetch(`api/index.php?action=get_grading_sheet&class_id=${classId}&period=${period}`);
+        const resp = await fetch(`api/index.php?action=get_class_grades&class_id=${classId}`);
         const data = await resp.json();
         if (!data.success) {
             console.error('API Error:', data.message);
             return;
         }
         
-        const localGrades = getLocalStorageGrades(classId, period);
-        if (data.data && data.data.categories) {
-            data.data.categories.forEach(cat => {
-                if (cat.items && cat.items.length > 0) {
-                    cat.items.forEach(item => {
-                        if (!item.scores) item.scores = [];
-                        if (data.data.students && data.data.students.length > 0) {
-                            data.data.students.forEach(student => {
-                                const itemKey = `${item.id}_${student.id}`;
-                                if (localGrades[itemKey] !== undefined) {
-                                    item.scores = item.scores.filter(s => s.student_id != student.id);
-                                    item.scores.push({
-                                        student_id: student.id,
-                                        raw_score: localGrades[itemKey]
-                                    });
-                                }
-                            });
-                        }
-                    });
-                }
-            });
-        }
-        
-        // Check if attendance integration is enabled
-        const configResp = await fetch(`api/index.php?action=get_attendance_config&class_id=${classId}`);
-        const configData = await configResp.json();
-        if (configData.success && configData.data.attendance_late_counts_present) {
-            const attResp = await fetch(`api/index.php?action=get_attendance_for_grading&class_id=${classId}`);
-            const attData = await attResp.json();
-            if (attData.success && attData.data.length > 0) {
-                const attMap = {};
-                attData.data.forEach(a => { attMap[a.student_id] = a.attendance_rate; });
-                
-                // Find Class Standing category in current period
-                const standingCat = data.data.categories.find(c => c.period === period && c.name.toLowerCase().includes('standing'));
-                if (standingCat) {
-                    const virtualItem = {
-                        id: -1,
-                        grade_category_id: standingCat.id,
-                        label: 'Attendance',
-                        max_score: 100,
-                        sort_order: standingCat.items.length,
-                        isVirtual: true,
-                        scores: data.data.students.map(s => ({
-                            student_id: s.id,
-                            raw_score: attMap[s.id] || 0
-                        }))
-                    };
-                    standingCat.items.push(virtualItem);
-                }
-            }
-        }
-        
-        renderGradingTable(data.data, classId);
+        renderGradingTable(data.data, classId, period);
     } catch (e) {
         console.error('Error loading grading sheet:', e);
-        document.getElementById('gradingBody').innerHTML = `<tr><td colspan="20" class="text-center text-danger">Error loading grading sheet: ${e.message}</td></tr>`;
+        document.getElementById('gradingBody').innerHTML = `<tr><td colspan="50" class="text-center text-danger">Error loading grading sheet: ${e.message}</td></tr>`;
     }
 }
 
-function renderGradingTable(data, classId) {
-    const table = document.getElementById('gradingTable');
-    const thead = table.querySelector('thead');
-    const tbody = document.getElementById('gradingBody');
-    
-    if (!data || !data.students || data.students.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="100" class="text-center">No students found</td></tr>`;
-        return;
-    }
-    
-    if (!data.categories || data.categories.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="100" class="text-center">No grade categories found</td></tr>`;
-        return;
-    }
-    
-    // Store category info for calculations
-    window.gradingData = data;
-    
-    // Define colors for categories
-    const categoryColors = {
-        'Class Standing': '#fff3cd',
-        'Problem Set': '#e2f0fb',
-        'Quizzes': '#f0f8ff',
-        'Exam': '#ffe6e6',
-        'default': '#f5f5f5'
-    };
-    
-    const getCategoryColor = (name) => categoryColors[name] || categoryColors['default'];
-    
-    // First, build all column definitions
-    let columns = [];
-    let totalCols = 1; // Start with student name
-    
-    data.categories.forEach((cat, catIdx) => {
-        if (cat.items && cat.items.length > 0) {
-            cat.items.forEach((item, itemIdx) => {
-                columns.push({ type: 'score', catIdx, itemIdx, item, cat });
-                totalCols++;
-            });
-            columns.push({ type: 'catGrade', catIdx, cat });
-            totalCols++;
-        }
-    });
-    
-    // Add summary columns
-    columns.push({ type: 'period' });
-    columns.push({ type: 'finalGrade' });
-    columns.push({ type: 'gradePoint' });
-    columns.push({ type: 'status' });
-    totalCols += 4;
-    
-    // Build main header (category names)
-    let headerRow1 = '<tr><th rowspan="2" style="min-width: 200px; background: #f0f0f0; border: 2px solid #999; padding: 10px; vertical-align: middle;">Student</th>';
-    
-    let categoryColCount = 0;
-    data.categories.forEach((cat, catIdx) => {
-        if (cat.items && cat.items.length > 0) {
-            const itemCount = cat.items.length;
-            const colspan = itemCount + 1; // items + category total
-            const colWidth = Math.max(140, itemCount * 90);
-            
-            headerRow1 += `<th colspan="${colspan}" class="text-center category-header" 
-                          style="background: ${getCategoryColor(cat.name)}; border: 2px solid #999; cursor: pointer; min-width: ${colWidth}px; padding: 10px;"
-                          onclick="toggleCategory(${catIdx})" title="Click to collapse/expand">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span style="flex: 1;">
-                        <strong>${cat.name}</strong> <small>(${cat.weight_percent}%)</small>
-                        <i class="bi bi-chevron-down" id="chevron-${catIdx}" style="font-size: 12px; margin-left: 5px;"></i>
-                    </span>
-                    <button class="btn btn-sm btn-light" onclick="event.stopPropagation(); addGradeItem(${cat.id}, '${cat.name}')" style="margin-left: 5px; padding: 2px 5px; white-space: nowrap;">
-                        <i class="bi bi-plus"></i> Add
-                    </button>
-                </div>
-            </th>`;
-            categoryColCount += colspan;
-        }
-    });
-    
-    headerRow1 += `<th colspan="4" class="text-center summary-sticky" style="background: #f0f0f0; border: 2px solid #999; min-width: 450px; padding: 10px;"><strong>Summary</strong></th></tr>`;
-    
-    // Build sub-header (item names)
-    let headerRow2 = '<tr>';
-    
-    data.categories.forEach((cat, catIdx) => {
-        if (cat.items && cat.items.length > 0) {
-            cat.items.forEach((item, itemIdx) => {
-                // Determine item type and get icon
-                let itemIcon = '📋';
-                const itemLabel = item.label.toLowerCase();
-                
-                if (itemLabel.includes('quiz')) itemIcon = '✓';
-                else if (itemLabel.includes('exam')) itemIcon = '📝';
-                else if (itemLabel.includes('problem')) itemIcon = '🔧';
-                else if (itemLabel.includes('standing')) itemIcon = '👤';
-                
-                headerRow2 += `<th class="text-center category-item-header" id="cat-${catIdx}-item-${itemIdx}"
-                                style="font-size: 11px; background: ${getCategoryColor(cat.name)}; padding: 8px; border: 1px solid #ccc; min-width: 90px; vertical-align: top;">
-                    <div style="font-size: 18px; margin: 2px 0;">${item.isVirtual ? '📅' : itemIcon}</div>
-                    <div style="font-weight: bold; line-height: 1.2; font-size: 10px;">${item.label}</div>
-                    <div style="font-size: 9px; color: #666; margin: 2px 0;">/${item.max_score}</div>
-                    ${item.isVirtual ? '<small class="text-info">Auto</small>' : `<button class="btn btn-xs btn-link p-0" onclick="deleteGradeItem(${item.id})" style="font-size: 8px; color: #dc3545; text-decoration: none; margin-top: 2px;">✕</button>`}
-                </th>`;
-            });
-            
-            headerRow2 += `<th class="text-center" id="cat-${catIdx}-total" 
-                             style="background: ${getCategoryColor(cat.name)}; font-weight: bold; font-size: 11px; border: 2px solid #999; padding: 8px; min-width: 80px; vertical-align: top;">
-                             <strong>${cat.name.split(' ')[0]}</strong><br><small>Grade</small></th>`;
-        }
-    });
-    
-    headerRow2 += `<th class="summary-sticky" style="background: #f0f0f0; font-size: 11px; border: 2px solid #999; padding: 8px; min-width: 100px; vertical-align: top;"><strong>Period<br>Grade</strong></th>
-                     <th class="summary-sticky" style="background: #fff3cd; font-size: 11px; border: 2px solid #999; padding: 8px; min-width: 100px; vertical-align: top;"><strong>Final<br>Grade</strong></th>
-                     <th class="summary-sticky" style="background: #c3e6cb; font-size: 11px; border: 2px solid #999; padding: 8px; min-width: 90px; vertical-align: top;"><strong>Grade<br>Point</strong></th>
-                     <th class="summary-sticky" style="background: #f0f0f0; font-size: 11px; border: 2px solid #999; padding: 8px; min-width: 90px; vertical-align: top;"><strong>Status</strong></th></tr>`;
-    
-    thead.innerHTML = headerRow1 + headerRow2;
-    
-    // Build body rows
-    let bodyHtml = '';
-    data.students.forEach(student => {
-        bodyHtml += `<tr data-student="${student.id}" style="height: 50px;">
-            <td style="font-weight: bold; position: sticky; left: 0; background: white; z-index: 10; border-right: 3px solid #999; padding: 8px; vertical-align: middle; min-width: 200px;">
-                ${student.last_name}, ${student.first_name}
-            </td>`;
+async function loadPerfectScores(classId, period) {
+    try {
+        const resp = await fetch(`api/index.php?action=get_component_perfect_scores&class_id=${classId}&period=${period}`);
+        const data = await resp.json();
+        if (!data.success) return;
         
-        let allCategoryGrades = [];
-        
-        data.categories.forEach((cat, catIndex) => {
-            let categoryTotal = 0;
-            let categoryMaxScore = 0;
-            
-            if (cat.items && cat.items.length > 0) {
-                cat.items.forEach((item, itemIdx) => {
-                    // Get score from item.scores array
-                    let score = '';
-                    if (item.scores && Array.isArray(item.scores)) {
-                        const scoreRecord = item.scores.find(s => s.student_id == student.id);
-                        score = scoreRecord ? scoreRecord.raw_score : '';
-                    }
-                    
-                    if (item.isVirtual) {
-                        bodyHtml += `<td class="grade-cell category-${catIndex}-item" 
-                                    style="text-align: center; padding: 4px; background: ${getCategoryColor(cat.name)}; border: 1px solid #ddd; min-width: 90px; vertical-align: middle;">
-                            <span class="badge bg-info" style="font-size: 12px; padding: 8px 12px;">${score !== '' ? parseFloat(score).toFixed(1) : '0.0'}%</span>
-                        </td>`;
-                    } else {
-                        bodyHtml += `<td class="grade-cell category-${catIndex}-item" 
-                                    style="text-align: center; padding: 4px; background: ${getCategoryColor(cat.name)}; border: 1px solid #ddd; min-width: 90px; vertical-align: middle;">
-                            <input type="number" class="grade-input" 
-                                   data-item="${item.id}" data-student="${student.id}" 
-                                   data-max="${item.max_score}" data-cat-idx="${catIndex}" 
-                                   value="${score || ''}" 
-                                   step="1" min="0" max="${item.max_score}"
-                                   oninput="saveGradeAndCalculate(${item.id}, ${student.id}, this.value, ${catIndex})"
-                                   style="width: 75px; padding: 8px; text-align: center; border: 1px solid #999; border-radius: 3px; font-weight: bold; background: white;">
-                        </td>`;
-                    }
-                    
-                    if (score !== '' && score !== null && score !== undefined) {
-                        categoryTotal += parseFloat(score);
-                    }
-                    categoryMaxScore += parseFloat(item.max_score);
-                });
-                
-                // Calculate category grade using transmutation formula
-                let catGrade = categoryMaxScore > 0 ? transmute(categoryTotal, categoryMaxScore) : 0;
-                allCategoryGrades.push({ weight: cat.weight_percent / 100, grade: catGrade });
-                
-                bodyHtml += `<td class="cat-grade category-${catIndex}-total" data-student="${student.id}" data-cat="${catIndex}" 
-                             style="text-align: center; background: ${getCategoryColor(cat.name)}; font-weight: bold; padding: 8px; border: 2px solid #999; min-width: 80px; vertical-align: middle;">
-                             ${catGrade.toFixed(2)}</td>`;
+        const scores = data.data;
+        document.querySelectorAll('.perfect-score-input').forEach(input => {
+            const component = input.dataset.component;
+            if (scores[component] !== undefined) {
+                input.value = scores[component];
+            } else {
+                input.value = '';
             }
         });
-        
-        // Calculate period grade (weighted average)
-        let periodGrade = 0;
-        let totalWeight = 0;
-        allCategoryGrades.forEach(cg => {
-            periodGrade += cg.grade * cg.weight;
-            totalWeight += cg.weight;
+    } catch (e) {
+        console.error('Error loading perfect scores:', e);
+    }
+}
+
+async function savePerfectScores() {
+    const classId = document.getElementById('perfectScoreClassId').value;
+    const period = document.getElementById('perfectScorePeriod').value;
+    
+    const scores = {
+        class_participation: parseFloat(document.getElementById('ps_class_participation').value) || 0,
+        problem_set: parseFloat(document.getElementById('ps_problem_set').value) || 0,
+        quizzes: parseFloat(document.getElementById('ps_quizzes').value) || 0,
+        periodical_exam: parseFloat(document.getElementById('ps_periodical_exam').value) || 0
+    };
+    
+    try {
+        const resp = await fetch('api/index.php?action=save_component_perfect_scores', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ class_id: classId, period, scores })
         });
-        periodGrade = totalWeight > 0 ? periodGrade / totalWeight : 0;
-        
-        // Get grade point
-        let gradePoint = getGradePoint(periodGrade);
-        let remarks = periodGrade >= 75 ? 'PASS' : 'FAIL';
-        
-        bodyHtml += `<td class="period-grade summary-sticky" data-student="${student.id}" 
-                    style="text-align: center; background: #f0f0f0; font-weight: bold; padding: 8px; border: 1px solid #999; min-width: 100px; vertical-align: middle;">
-                    ${periodGrade.toFixed(2)}</td>`;
-        bodyHtml += `<td class="final-grade summary-sticky" data-student="${student.id}" 
-                    style="text-align: center; background: #fff3cd; font-weight: bold; padding: 8px; border-radius: 3px; font-size: 16px; border: 1px solid #999; min-width: 100px; vertical-align: middle;">
-                    ${Math.round(periodGrade)}</td>`;
-        bodyHtml += `<td class="grade-point summary-sticky" data-student="${student.id}" 
-                    style="text-align: center; background: #c3e6cb; font-weight: bold; padding: 8px; border-radius: 3px; border: 1px solid #999; min-width: 90px; vertical-align: middle;">
-                    ${gradePoint.toFixed(2)}</td>`;
-        bodyHtml += `<td class="remarks summary-sticky" data-student="${student.id}" 
-                    style="text-align: center; padding: 8px; border: 1px solid #999; min-width: 90px; vertical-align: middle;">
-                    <span class="badge ${remarks === 'PASS' ? 'bg-success' : 'bg-danger'}" style="font-size: 11px; padding: 6px 10px;">
-                        ${remarks}</span></td>`;
-        bodyHtml += '</tr>';
+        const data = await resp.json();
+        if (data.success) {
+            alert('Perfect scores saved!');
+            loadPerfectScores(classId, period);
+            bootstrap.Modal.getInstance(document.getElementById('perfectScoreModal')).hide();
+            loadGradingSheet(classId, period);
+        } else {
+            alert('Error: ' + data.message);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+function showPerfectScoreModal() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const classId = urlParams.get('id');
+    const period = urlParams.get('period') || 'midterm';
+    
+    document.getElementById('perfectScoreClassId').value = classId;
+    document.getElementById('perfectScorePeriod').value = period;
+    document.getElementById('modalPeriodLabel').textContent = period.charAt(0).toUpperCase() + period.slice(1);
+    
+    document.querySelectorAll('.perfect-score-input').forEach(input => {
+        const component = input.dataset.component;
+        const modalInput = document.getElementById('ps_' + component);
+        if (modalInput) {
+            modalInput.value = input.value || '';
+        }
     });
     
-    tbody.innerHTML = bodyHtml || `<tr><td colspan="100" class="text-center">No data</td></tr>`;
+    const modal = new bootstrap.Modal(document.getElementById('perfectScoreModal'));
+    modal.show();
+}
+
+function renderGradingTable(data, classId, period) {
+    const table = document.getElementById('gradingTable');
+    const thead = document.getElementById('gradingHead');
+    const tbody = document.getElementById('gradingBody');
     
-    // Initialize all categories as expanded
-    window.collapsedCategories = {};
+    if (!data || !data.grades || data.grades.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="50" class="text-center">No students found</td></tr>`;
+        return;
+    }
+    
+    const gradesData = data.grades;
+    const classInfo = data.class;
+    
+    // Define column structure for the period
+    // Midterm: CP1, CP2 | PS1 | Q1, Q2 | Exam
+    // Final:   CP1, CP2, CP3, CP4 | PS1 | Q1, Q2 | Exam
+    const cpCount = period === 'midterm' ? 2 : 4;
+    const psCount = 1;
+    const quizCount = 2;
+    const examCount = 1;
+    
+    // Perfect scores from DB
+    const perfectScores = {
+        class_participation: parseFloat(document.querySelector('.perfect-score-input[data-component="class_participation"]')?.value || '0'),
+        problem_set: parseFloat(document.querySelector('.perfect-score-input[data-component="problem_set"]')?.value || '0'),
+        quizzes: parseFloat(document.querySelector('.perfect-score-input[data-component="quizzes"]')?.value || '0'),
+        periodical_exam: parseFloat(document.querySelector('.perfect-score-input[data-component="periodical_exam"]')?.value || '0')
+    };
+    
+    // Build 3-row header
+    let headerHTML = '';
+    
+    // Row 1: Main category spans
+    headerHTML += '<tr class="header-row1">';
+    headerHTML += '<th rowspan="3" class="col-student">Name of Students</th>';
+    
+    // CLASS STANDING (spans CP + PS)
+    const classStandingCols = (cpCount + 2) + (psCount + 2); // CP items + total + equiv + PS items + total + equiv
+    headerHTML += `<th colspan="${classStandingCols}" class="header-main">CLASS STANDING</th>`;
+    
+    // QUIZZES
+    const quizCols = quizCount + 2; // Q items + total + equiv
+    headerHTML += `<th colspan="${quizCols}" class="header-main">QUIZZES</th>`;
+    
+    // PERIODICAL EXAM
+    const examCols = examCount + 2; // Score + equiv + weight
+    headerHTML += `<th colspan="${examCols}" class="header-main">PERIODICAL EXAM</th>`;
+    
+    // MIDTERM GRADE, Round off, REMARKS (each spans 3 rows)
+    headerHTML += '<th rowspan="3" class="header-main header-midterm">MIDTERM GRADE</th>';
+    headerHTML += '<th rowspan="3" class="header-main header-roundoff">Round off</th>';
+    headerHTML += '<th rowspan="3" class="header-main header-remarks">REMARKS</th>';
+    headerHTML += '</tr>';
+    
+    // Row 2: Sub-groups (Class Participation | Problem Set)
+    headerHTML += '<tr class="header-row2">';
+    headerHTML += `<th colspan="${cpCount + 2}" class="header-sub">Class Participation</th>`;
+    headerHTML += `<th colspan="${psCount + 2}" class="header-sub">Problem Set</th>`;
+    // Quizzes and Periodical Exam don't have sub-groups, so skip
+    headerHTML += '</tr>';
+    
+    // Row 3: Column labels
+    headerHTML += '<tr class="header-row3">';
+    
+    // Class Participation columns
+    for (let i = 1; i <= cpCount; i++) {
+        headerHTML += `<th class="header-col header-raw">CP${i}</th>`;
+    }
+    headerHTML += `<th class="header-col header-total">Total</th>`;
+    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
+    headerHTML += `<th class="header-col header-weight">20%</th>`;
+    
+    // Problem Set columns
+    for (let i = 1; i <= psCount; i++) {
+        headerHTML += `<th class="header-col header-raw">PS${i}</th>`;
+    }
+    headerHTML += `<th class="header-col header-total">Total</th>`;
+    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
+    headerHTML += `<th class="header-col header-weight">20%</th>`;
+    
+    // Quizzes columns
+    for (let i = 1; i <= quizCount; i++) {
+        headerHTML += `<th class="header-col header-raw">Q${i}</th>`;
+    }
+    headerHTML += `<th class="header-col header-total">Total</th>`;
+    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
+    headerHTML += `<th class="header-col header-weight">30%</th>`;
+    
+    // Periodical Exam columns
+    headerHTML += `<th class="header-col header-raw">Score</th>`;
+    headerHTML += `<th class="header-col header-equiv">EQUIV.</th>`;
+    headerHTML += `<th class="header-col header-weight">30%</th>`;
+    
+    headerHTML += '</tr>';
+    
+    thead.innerHTML = headerHTML;
+    
+    // Build body rows
+    let bodyHTML = '';
+    
+    // Perfect Score Reference Row
+    bodyHTML += '<tr class="perfect-score-row">';
+    bodyHTML += '<td class="col-student"><strong>Perfect Score</strong></td>';
+    
+    // CP items
+    for (let i = 1; i <= cpCount; i++) {
+        const maxPerItem = cpCount > 0 ? Math.round(perfectScores.class_participation / cpCount) : 0;
+        bodyHTML += `<td class="cell-raw perfect-cell">${maxPerItem}</td>`;
+    }
+    bodyHTML += `<td class="cell-total perfect-cell">${perfectScores.class_participation || ''}</td>`;
+    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
+    bodyHTML += `<td class="cell-weight perfect-cell">20%</td>`;
+    
+    // PS items
+    for (let i = 1; i <= psCount; i++) {
+        bodyHTML += `<td class="cell-raw perfect-cell">${perfectScores.problem_set || ''}</td>`;
+    }
+    bodyHTML += `<td class="cell-total perfect-cell">${perfectScores.problem_set || ''}</td>`;
+    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
+    bodyHTML += `<td class="cell-weight perfect-cell">20%</td>`;
+    
+    // Quiz items
+    for (let i = 1; i <= quizCount; i++) {
+        const maxPerItem = quizCount > 0 ? Math.round(perfectScores.quizzes / quizCount) : 0;
+        bodyHTML += `<td class="cell-raw perfect-cell">${maxPerItem}</td>`;
+    }
+    bodyHTML += `<td class="cell-total perfect-cell">${perfectScores.quizzes || ''}</td>`;
+    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
+    bodyHTML += `<td class="cell-weight perfect-cell">30%</td>`;
+    
+    // Exam
+    bodyHTML += `<td class="cell-raw perfect-cell">${perfectScores.periodical_exam || ''}</td>`;
+    bodyHTML += `<td class="cell-equiv perfect-cell"></td>`;
+    bodyHTML += `<td class="cell-weight perfect-cell">30%</td>`;
+    
+    // Summary columns for perfect score row
+    bodyHTML += `<td class="cell-midterm perfect-cell"></td>`;
+    bodyHTML += `<td class="cell-roundoff perfect-cell"></td>`;
+    bodyHTML += `<td class="cell-remarks perfect-cell"></td>`;
+    bodyHTML += '</tr>';
+    
+    // Student rows
+    gradesData.forEach(student => {
+        const midterm = student['midterm'] || { grade: 0, grade_point: 5.00, remarks: 'INC', components: {} };
+        const final = student['final'] || { grade: 0, grade_point: 5.00, remarks: 'INC', components: {} };
+        const overall = student['overall'] || { grade: 0, grade_point: 5.00, remarks: 'INC' };
+        
+        const periodData = period === 'midterm' ? midterm : final;
+        const periodGrade = periodData.grade;
+        const periodGradePoint = periodData.grade_point;
+        const periodRemarks = periodData.remarks;
+        const componentsData = periodData.components || {};
+        
+        bodyHTML += `<tr data-student="${student.id}">`;
+        bodyHTML += `<td class="col-student">${student.last_name}, ${student.first_name} ${student.middle_initial || ''}.</td>`;
+        
+        // Helper to get component data
+        const getCompData = (compKey) => componentsData[compKey] || { items: [], raw_total: 0, max_total: 0, perfect_score: 0 };
+        
+        // CLASS PARTICIPATION
+        const cpData = getCompData('class_participation');
+        const cpItems = cpData.items || [];
+        const cpRawTotal = cpData.raw_total || 0;
+        const cpPerfectScore = perfectScores.class_participation || cpData.perfect_score || cpData.max_total || 0;
+        const cpEquiv = cpPerfectScore > 0 ? transmute(cpRawTotal, cpPerfectScore) : 0;
+        const cpWeighted = cpEquiv * 0.20;
+        
+        for (let i = 1; i <= cpCount; i++) {
+            const item = cpItems[i-1] || { raw_score: '', max_score: 0, item_id: null };
+            const score = item.raw_score !== undefined && item.raw_score !== null ? item.raw_score : '';
+            const maxScore = item.max_score || (cpCount > 0 ? Math.round(cpPerfectScore / cpCount) : 0);
+            bodyHTML += `<td class="cell-raw">
+                <input type="number" class="grade-input" 
+                       data-item="${item.item_id || 'new'}" data-student="${student.id}" 
+                       data-max="${maxScore}" data-component="class_participation" 
+                       data-sub-idx="${i-1}"
+                       value="${score !== '' ? score : ''}" 
+                       step="1" min="0" max="${maxScore}"
+                       oninput="onGradeInput(this, ${student.id}, 'class_participation', ${i-1})"
+                       style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
+            </td>`;
+        }
+        bodyHTML += `<td class="cell-total cell-readonly">${cpRawTotal > 0 ? cpRawTotal : ''}</td>`;
+        bodyHTML += `<td class="cell-equiv cell-readonly">${cpRawTotal > 0 ? cpEquiv.toFixed(2) : ''}</td>`;
+        bodyHTML += `<td class="cell-weight cell-readonly">20%</td>`;
+        
+        // PROBLEM SET
+        const psData = getCompData('problem_set');
+        const psItems = psData.items || [];
+        const psRawTotal = psData.raw_total || 0;
+        const psPerfectScore = perfectScores.problem_set || psData.perfect_score || psData.max_total || 0;
+        const psEquiv = psPerfectScore > 0 ? transmute(psRawTotal, psPerfectScore) : 0;
+        const psWeighted = psEquiv * 0.20;
+        
+        for (let i = 1; i <= psCount; i++) {
+            const item = psItems[i-1] || { raw_score: '', max_score: 0, item_id: null };
+            const score = item.raw_score !== undefined && item.raw_score !== null ? item.raw_score : '';
+            const maxScore = item.max_score || psPerfectScore;
+            bodyHTML += `<td class="cell-raw">
+                <input type="number" class="grade-input" 
+                       data-item="${item.item_id || 'new'}" data-student="${student.id}" 
+                       data-max="${maxScore}" data-component="problem_set" 
+                       data-sub-idx="${i-1}"
+                       value="${score !== '' ? score : ''}" 
+                       step="1" min="0" max="${maxScore}"
+                       oninput="onGradeInput(this, ${student.id}, 'problem_set', ${i-1})"
+                       style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
+            </td>`;
+        }
+        bodyHTML += `<td class="cell-total cell-readonly">${psRawTotal > 0 ? psRawTotal : ''}</td>`;
+        bodyHTML += `<td class="cell-equiv cell-readonly">${psRawTotal > 0 ? psEquiv.toFixed(2) : ''}</td>`;
+        bodyHTML += `<td class="cell-weight cell-readonly">20%</td>`;
+        
+        // QUIZZES
+        const quizData = getCompData('quizzes');
+        const quizItems = quizData.items || [];
+        const quizRawTotal = quizData.raw_total || 0;
+        const quizPerfectScore = perfectScores.quizzes || quizData.perfect_score || quizData.max_total || 0;
+        const quizEquiv = quizPerfectScore > 0 ? transmute(quizRawTotal, quizPerfectScore) : 0;
+        const quizWeighted = quizEquiv * 0.30;
+        
+        for (let i = 1; i <= quizCount; i++) {
+            const item = quizItems[i-1] || { raw_score: '', max_score: 0, item_id: null };
+            const score = item.raw_score !== undefined && item.raw_score !== null ? item.raw_score : '';
+            const maxScore = item.max_score || (quizCount > 0 ? Math.round(quizPerfectScore / quizCount) : 0);
+            bodyHTML += `<td class="cell-raw">
+                <input type="number" class="grade-input" 
+                       data-item="${item.item_id || 'new'}" data-student="${student.id}" 
+                       data-max="${maxScore}" data-component="quizzes" 
+                       data-sub-idx="${i-1}"
+                       value="${score !== '' ? score : ''}" 
+                       step="1" min="0" max="${maxScore}"
+                       oninput="onGradeInput(this, ${student.id}, 'quizzes', ${i-1})"
+                       style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
+            </td>`;
+        }
+        bodyHTML += `<td class="cell-total cell-readonly">${quizRawTotal > 0 ? quizRawTotal : ''}</td>`;
+        bodyHTML += `<td class="cell-equiv cell-readonly">${quizRawTotal > 0 ? quizEquiv.toFixed(2) : ''}</td>`;
+        bodyHTML += `<td class="cell-weight cell-readonly">30%</td>`;
+        
+        // PERIODICAL EXAM
+        const examData = getCompData('periodical_exam');
+        const examItems = examData.items || [];
+        const examRawTotal = examData.raw_total || 0;
+        const examPerfectScore = perfectScores.periodical_exam || examData.perfect_score || examData.max_total || 0;
+        const examEquiv = examPerfectScore > 0 ? transmute(examRawTotal, examPerfectScore) : 0;
+        const examWeighted = examEquiv * 0.30;
+        
+        const examItem = examItems[0] || { raw_score: '', max_score: 0, item_id: null };
+        const examScore = examItem.raw_score !== undefined && examItem.raw_score !== null ? examItem.raw_score : '';
+        const examMaxScore = examItem.max_score || examPerfectScore;
+        bodyHTML += `<td class="cell-raw">
+            <input type="number" class="grade-input" 
+                   data-item="${examItem.item_id || 'new'}" data-student="${student.id}" 
+                   data-max="${examMaxScore}" data-component="periodical_exam" 
+                   data-sub-idx="0"
+                   value="${examScore !== '' ? examScore : ''}" 
+                   step="1" min="0" max="${examMaxScore}"
+                   oninput="onGradeInput(this, ${student.id}, 'periodical_exam', 0)"
+                   style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
+        </td>`;
+        bodyHTML += `<td class="cell-equiv cell-readonly">${examRawTotal > 0 ? examEquiv.toFixed(2) : ''}</td>`;
+        bodyHTML += `<td class="cell-weight cell-readonly">30%</td>`;
+        
+        // MIDTERM GRADE (weighted sum)
+        const totalWeighted = cpWeighted + psWeighted + quizWeighted + examWeighted;
+        bodyHTML += `<td class="cell-midterm cell-readonly">${totalWeighted > 0 ? totalWeighted.toFixed(2) : ''}</td>`;
+        
+        // Round off
+        bodyHTML += `<td class="cell-roundoff cell-readonly">${totalWeighted > 0 ? Math.round(totalWeighted) : ''}</td>`;
+        
+        // Remarks
+        const remarks = totalWeighted >= 75 ? 'Passed' : (totalWeighted > 0 ? 'Failed' : 'INC');
+        bodyHTML += `<td class="cell-remarks cell-readonly">${remarks}</td>`;
+        
+        bodyHTML += '</tr>';
+    });
+    
+    tbody.innerHTML = bodyHTML || `<tr><td colspan="50" class="text-center">No data</td></tr>`;
+    
+    // Attach hover handlers for non-colored cells
+    attachRowHoverEffects();
 }
 
 const saveTimers = {};
 
-async function saveGradeAndCalculate(gradeItemId, studentId, score, categoryIndex) {
-    const studentKey = `${studentId}`;
+function onGradeInput(input, studentId, componentKey, subIdx) {
+    // Clamp value to max
+    const maxScore = parseFloat(input.dataset.max) || 100;
+    let clamped = Math.min(Math.max(parseFloat(input.value) || 0, 0), maxScore);
+    clamped = Math.round(clamped);
+    input.value = clamped;
+    
+    calculateRowGrades(studentId);
+    
+    const gradeItemId = input.dataset.item;
+    const studentKey = `${studentId}_${componentKey}_${subIdx}`;
     
     if (saveTimers[studentKey]) {
         clearTimeout(saveTimers[studentKey]);
     }
     
-    const input = document.querySelector(`input[data-item="${gradeItemId}"][data-student="${studentId}"]`);
-    if (input) {
-        const maxScore = parseFloat(input.dataset.max) || 100;
-        let clamped = Math.min(Math.max(parseFloat(score) || 0, 0), maxScore);
-        clamped = Math.round(clamped);
-        input.value = clamped;
+    // Only save if we have a valid grade_item_id (not 'new')
+    if (gradeItemId !== 'new' && parseInt(gradeItemId) > 0) {
+        saveTimers[studentKey] = setTimeout(async () => {
+            try {
+                const resp = await fetch('api/index.php?action=save_grade', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        grade_item_id: parseInt(gradeItemId), 
+                        student_id: studentId, 
+                        raw_score: clamped 
+                    })
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    console.error('Save failed:', data.message);
+                }
+            } catch (e) {
+                console.error('Error saving grade:', e);
+            }
+        }, 500);
     }
-    
-    const urlParams = new URLSearchParams(window.location.search);
-    const currentClassId = urlParams.get('id');
-    const currentPeriod = urlParams.get('period') || 'midterm';
-    saveGradeToLocalStorage(currentClassId, currentPeriod, gradeItemId, studentId, parseFloat(input?.value || score) || 0);
-    
-    calculateRowGrades(studentId);
-    
-    saveTimers[studentKey] = setTimeout(async () => {
-        try {
-            const resp = await fetch('api/index.php?action=save_grade', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    grade_item_id: gradeItemId, 
-                    student_id: studentId, 
-                    raw_score: parseFloat(input?.value || score) || 0 
-                })
-            });
-            const data = await resp.json();
-            if (data.success) {
-                saveGradeToLocalStorage(currentClassId, currentPeriod, gradeItemId, studentId, parseFloat(input?.value || score) || 0);
-            }
-            if (!data.success) {
-                console.error('Save failed:', data.message);
-            }
-        } catch (e) {
-            console.error('Error saving grade:', e);
-        }
-    }, 500);
 }
 
 function calculateRowGrades(studentId) {
-    if (!window.gradingData) return;
+    // Get perfect scores from display
+    const perfectScores = {
+        class_participation: parseFloat(document.querySelector('.perfect-score-input[data-component="class_participation"]')?.value || '0'),
+        problem_set: parseFloat(document.querySelector('.perfect-score-input[data-component="problem_set"]')?.value || '0'),
+        quizzes: parseFloat(document.querySelector('.perfect-score-input[data-component="quizzes"]')?.value || '0'),
+        periodical_exam: parseFloat(document.querySelector('.perfect-score-input[data-component="periodical_exam"]')?.value || '0')
+    };
     
-    const data = window.gradingData;
-    let allCategoryGrades = [];
+    const components = [
+        { key: 'class_participation', weight: 0.20 },
+        { key: 'problem_set', weight: 0.20 },
+        { key: 'quizzes', weight: 0.30 },
+        { key: 'periodical_exam', weight: 0.30 }
+    ];
     
-    // Calculate each category grade
-    data.categories.forEach((cat, catIndex) => {
-        let categoryTotal = 0;
-        let categoryMaxScore = 0;
+    let allWeightedScores = {};
+    
+    components.forEach(comp => {
+        let total = 0;
         
-        if (cat.items && cat.items.length > 0) {
-            cat.items.forEach(item => {
-                if (item.isVirtual) {
-                    const scoreRecord = item.scores.find(s => s.student_id == studentId);
-                    const score = scoreRecord ? Math.round(parseFloat(scoreRecord.raw_score) || 0) : 0;
-                    categoryTotal += score;
-                    categoryMaxScore += parseFloat(item.max_score);
-                } else {
-                    const input = document.querySelector(`input[data-item="${item.id}"][data-student="${studentId}"]`);
-                    const score = input ? Math.round(parseFloat(input.value) || 0) : 0;
-                    
-                    categoryTotal += score;
-                    categoryMaxScore += parseFloat(item.max_score);
-                }
-            });
-        }
+        const inputs = document.querySelectorAll(`input[data-student="${studentId}"][data-component="${comp.key}"]`);
+        inputs.forEach(input => {
+            const score = parseFloat(input.value) || 0;
+            total += score;
+        });
         
-        // Transmute the category score
-        let catGrade = categoryMaxScore > 0 ? transmute(categoryTotal, categoryMaxScore) : 0;
-        allCategoryGrades.push({ weight: cat.weight_percent / 100, grade: catGrade, index: catIndex });
+        const perfectScore = perfectScores[comp.key] || 100;
+        const equivScore = perfectScore > 0 ? transmute(total, perfectScore) : 0;
+        const weighted = equivScore * comp.weight;
         
-        // Update category grade cell
-        const catGradeCell = document.querySelector(`.cat-grade[data-student="${studentId}"][data-cat="${catIndex}"]`);
-        if (catGradeCell) {
-            catGradeCell.textContent = catGrade.toFixed(2);
-        }
+        allWeightedScores[comp.key] = { total, equiv: equivScore, weighted };
     });
     
     // Calculate period grade (weighted average)
     let periodGrade = 0;
-    let totalWeight = 0;
-    allCategoryGrades.forEach(cg => {
-        periodGrade += cg.grade * cg.weight;
-        totalWeight += cg.weight;
+    components.forEach(comp => {
+        periodGrade += (allWeightedScores[comp.key]?.weighted || 0);
     });
-    periodGrade = totalWeight > 0 ? periodGrade / totalWeight : 0;
     
-    // Update period grade cell
-    const periodCell = document.querySelector(`.period-grade[data-student="${studentId}"]`);
-    if (periodCell) {
-        periodCell.textContent = periodGrade.toFixed(2);
-    }
+    // Update all computed cells for this student
+    updateComputedCells(studentId, allWeightedScores, periodGrade);
+}
+
+function updateComputedCells(studentId, allWeightedScores, periodGrade) {
+    const row = document.querySelector(`tr[data-student="${studentId}"]`);
+    if (!row) return;
     
-    // Update final grade (rounded)
-    const finalCell = document.querySelector(`.final-grade[data-student="${studentId}"]`);
-    if (finalCell) {
-        finalCell.textContent = Math.round(periodGrade);
-    }
+    // Get all cells in this row (skip the first cell which is student name)
+    const cells = row.querySelectorAll('td');
+    // We need to find specific cells by their class
     
-    // Update grade point
-    let gradePoint = getGradePoint(periodGrade);
-    const pointCell = document.querySelector(`.grade-point[data-student="${studentId}"]`);
-    if (pointCell) {
-        pointCell.textContent = gradePoint.toFixed(2);
-    }
+    const compOrder = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
     
-    // Update remarks
-    let remarks = periodGrade >= 75 ? 'PASS' : 'FAIL';
-    const remarksCell = document.querySelector(`.remarks[data-student="${studentId}"]`);
-    if (remarksCell) {
-        const badge = remarksCell.querySelector('.badge');
-        if (badge) {
-            badge.textContent = remarks;
-            badge.className = `badge ${remarks === 'PASS' ? 'bg-success' : 'bg-danger'}`;
+    compOrder.forEach((compKey, idx) => {
+        const data = allWeightedScores[compKey];
+        if (!data) return;
+        
+        // Find total cell (first cell with class cell-total.cell-readonly for this component)
+        // The structure is: raw inputs, then total, then equiv, then weight
+        // We'll find them by looking at the cell classes
+    });
+    
+    // Better: use querySelectorAll with specific class combinations
+    const totalCells = row.querySelectorAll('.cell-total.cell-readonly');
+    const equivCells = row.querySelectorAll('.cell-equiv.cell-readonly');
+    const weightCells = row.querySelectorAll('.cell-weight.cell-readonly');
+    const midtermCell = row.querySelector('.cell-midterm.cell-readonly');
+    const roundoffCell = row.querySelector('.cell-roundoff.cell-readonly');
+    const remarksCell = row.querySelector('.cell-remarks.cell-readonly');
+    
+    // The order matches compOrder: CP, PS, Quiz, Exam
+    compOrder.forEach((compKey, idx) => {
+        const data = allWeightedScores[compKey];
+        if (!data) return;
+        
+        // Total cell
+        if (totalCells[idx]) {
+            totalCells[idx].textContent = data.total > 0 ? data.total : '';
         }
+        
+        // Equiv cell
+        if (equivCells[idx]) {
+            equivCells[idx].textContent = data.total > 0 ? data.equiv.toFixed(2) : '';
+        }
+    });
+    
+    // Midterm grade
+    if (midtermCell) {
+        midtermCell.textContent = periodGrade > 0 ? periodGrade.toFixed(2) : '';
+    }
+    
+    // Round off
+    if (roundoffCell) {
+        roundoffCell.textContent = periodGrade > 0 ? Math.round(periodGrade) : '';
+    }
+    
+    // Remarks
+    if (remarksCell) {
+        const remarks = periodGrade >= 75 ? 'Passed' : (periodGrade > 0 ? 'Failed' : 'INC');
+        remarksCell.textContent = remarks;
     }
 }
 
-// Toggle category collapse/expand
-function toggleCategory(catIdx) {
-    if (!window.collapsedCategories) window.collapsedCategories = {};
-    
-    window.collapsedCategories[catIdx] = !window.collapsedCategories[catIdx];
-    const isCollapsed = window.collapsedCategories[catIdx];
-    
-    // Toggle visibility of all items in this category
-    const items = document.querySelectorAll(`.category-${catIdx}-item`);
-    const total = document.querySelector(`.category-${catIdx}-total`);
-    const chevron = document.getElementById(`chevron-${catIdx}`);
-    
-    items.forEach(item => {
-        item.style.display = isCollapsed ? 'none' : 'table-cell';
+function attachRowHoverEffects() {
+    const rows = document.querySelectorAll('#gradingBody tr:not(.perfect-score-row)');
+    rows.forEach(row => {
+        row.addEventListener('mouseenter', function() {
+            this.querySelectorAll('td:not(.cell-equiv):not(.cell-weight):not(.cell-midterm):not(.col-student)').forEach(cell => {
+                if (!cell.classList.contains('cell-equiv') && !cell.classList.contains('cell-weight') && !cell.classList.contains('cell-midterm')) {
+                    cell.style.backgroundColor = 'rgba(14, 165, 233, 0.08)';
+                }
+            });
+        });
+        row.addEventListener('mouseleave', function() {
+            this.querySelectorAll('td').forEach(cell => {
+                if (!cell.classList.contains('cell-equiv') && !cell.classList.contains('cell-weight') && !cell.classList.contains('cell-midterm') && !cell.classList.contains('perfect-cell')) {
+                    cell.style.backgroundColor = '';
+                }
+            });
+        });
     });
-    
-    if (total) {
-        total.style.display = isCollapsed ? 'none' : 'table-cell';
-    }
-    
-    if (chevron) {
-        chevron.style.transform = isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)';
-        chevron.style.transition = 'transform 0.3s ease';
-    }
 }
 
 // Transmutation formula: (raw/max)*50+50
@@ -467,7 +544,7 @@ function transmute(raw, max) {
     return (raw / max) * 50 + 50;
 }
 
-// Grade point lookup
+// Grade point lookup (for reference)
 function getGradePoint(score) {
     score = parseFloat(score);
     if (score < 75) return 5.00;
@@ -482,266 +559,303 @@ function getGradePoint(score) {
     return 1.00;
 }
 
-// Add Grade Item to Category
-async function addGradeItem(categoryId, categoryName) {
-    const label = prompt(`Add new item to ${categoryName}:`, `${categoryName} ${Math.floor(Math.random() * 10)}`);
-    if (!label) return;
-    
-    const maxScore = prompt('Max score:', '10');
-    if (!maxScore) return;
-    
-    try {
-        const resp = await fetch('api/index.php?action=add_grade_item', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ category_id: categoryId, label, max_score: parseFloat(maxScore) })
-        });
-        const data = await resp.json();
-        if (data.success) {
-            alert('Grade item added!');
-            // Reload the grading sheet
-            const urlParams = new URLSearchParams(window.location.search);
-            const classId = urlParams.get('id');
-            const period = urlParams.get('period') || 'midterm';
-            loadGradingSheet(classId, period);
-        } else {
-            alert('Error: ' + data.message);
-        }
-    } catch (e) {
-        alert('Error: ' + e.message);
-    }
-}
-
-// Delete Grade Item
-async function deleteGradeItem(itemId) {
-    if (!confirm('Delete this grade item?')) return;
-    
-    try {
-        const resp = await fetch('api/index.php?action=delete_grade_item', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: itemId })
-        });
-        const data = await resp.json();
-        if (data.success) {
-            const urlParams = new URLSearchParams(window.location.search);
-            const classId = urlParams.get('id');
-            const period = urlParams.get('period') || 'midterm';
-            clearLocalStorageGrades(classId, period);
-            alert('Grade item deleted!');
-            loadGradingSheet(classId, period);
-        } else {
-            alert('Error: ' + data.message);
-        }
-    } catch (e) {
-        alert('Error: ' + e.message);
-    }
-}
-
-// Category Management Functions
-async function loadCategoriesForDisplay(classId, period) {
-    try {
-        const resp = await fetch(`api/index.php?action=get_categories_by_period&class_id=${classId}&period=${period}`);
-        const data = await resp.json();
-        if (!data.success) return;
-        
-        displayCategories(data.data);
-    } catch (e) {
-        console.error('Error loading categories:', e);
-    }
-}
-
-function displayCategories(categories) {
-    const container = document.getElementById('categoriesContainer');
-    let html = '';
-    let totalWeight = 0;
-    
-    categories.forEach(cat => {
-        totalWeight += parseFloat(cat.weight_percent);
-        html += `
-        <div class="card" style="flex: 0 0 auto; min-width: 250px;">
-            <div class="card-body p-3">
-                <div class="d-flex justify-content-between align-items-start mb-2">
-                    <div>
-                        <h6 class="mb-1">${cat.name}</h6>
-                        <small class="text-muted">${cat.period.toUpperCase()}</small>
-                    </div>
-                    <div class="btn-group" role="group">
-                        <button class="btn btn-sm btn-outline-primary" onclick="showEditCategoryModal(${cat.id}, '${cat.name}', ${cat.weight_percent})">
-                            ✎ Edit
-                        </button>
-                        <button class="btn btn-sm btn-outline-danger" onclick="deleteCategory(${cat.id})">
-                            ✕ Delete
-                        </button>
-                    </div>
-                </div>
-                <div class="progress" style="height: 25px;">
-                    <div class="progress-bar bg-info" style="width: ${Math.min(cat.weight_percent, 100)}%;">
-                        <span style="font-weight: bold; color: white;">${cat.weight_percent}%</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-        `;
-    });
-    
-    container.innerHTML = html || '<p class="text-muted">No categories yet. Add one to get started!</p>';
-    document.getElementById('totalWeight').textContent = totalWeight;
-    
-    // Show warning if total is not 100%
-    if (totalWeight !== 100) {
-        const warning = document.createElement('div');
-        warning.className = 'alert alert-warning mt-2';
-        warning.innerHTML = `<strong>Warning:</strong> Total weight is ${totalWeight}%, but should be 100% for proper grading.`;
-        container.parentElement.appendChild(warning);
-    }
-}
-
-function showAddCategoryModal(classId, period) {
-    document.getElementById('categoryModalTitle').textContent = 'Add Grade Category';
-    document.getElementById('categoryForm').reset();
-    document.getElementById('categoryWeight').value = '20';
-    document.getElementById('categoryPeriod').value = period;
-    document.getElementById('categoryMaxScore').value = '100';
-    
-    window.editingCategoryId = null;
-    window.currentClassId = classId;
-    window.currentPeriod = period;
-    
-    updateWeightWarning();
-    
-    const modal = new bootstrap.Modal(document.getElementById('categoryModal'));
-    modal.show();
-}
-
-function showEditCategoryModal(catId, name, weight) {
-    document.getElementById('categoryModalTitle').textContent = 'Edit Grade Category';
-    document.getElementById('categoryName').value = name;
-    document.getElementById('categoryWeight').value = weight;
-    document.getElementById('categoryPeriod').value = window.currentPeriod;
-    document.getElementById('categoryMaxScore').value = '100';
-    
-    window.editingCategoryId = catId;
-    
-    updateWeightWarning();
-    
-    const modal = new bootstrap.Modal(document.getElementById('categoryModal'));
-    modal.show();
-}
-
-function updateWeightWarning() {
-    const currentWeight = parseFloat(document.getElementById('categoryWeight').value) || 0;
-    const otherWeights = document.querySelectorAll('.card .progress-bar');
-    
-    let totalOther = 0;
-    otherWeights.forEach(bar => {
-        const parentCard = bar.closest('.card');
-        if (!parentCard || !parentCard.textContent.includes('Edit')) {
-            const text = bar.textContent.match(/(\d+)/);
-            if (text && !window.editingCategoryId) {
-                totalOther += parseInt(text[1]);
-            }
-        }
-    });
-    
-    const newTotal = totalOther + currentWeight;
-    const warning = document.getElementById('weightWarning');
-    
-    if (newTotal !== 100) {
-        warning.style.display = 'block';
-        document.getElementById('newTotal').textContent = newTotal;
-    } else {
-        warning.style.display = 'none';
-    }
-    
-    document.getElementById('currentTotal').textContent = totalOther;
-}
-
-async function saveCategory() {
-    const name = document.getElementById('categoryName').value.trim();
-    const weight = parseFloat(document.getElementById('categoryWeight').value);
-    
-    if (!name) {
-        alert('Category name is required');
-        return;
-    }
-    
-    if (isNaN(weight) || weight <= 0 || weight > 100) {
-        alert('Weight must be a number between 1 and 100');
-        return;
-    }
-    
-    const isEditing = window.editingCategoryId;
-    const endpoint = isEditing ? 'update_category' : 'add_category';
-    const period = document.getElementById('categoryPeriod').value;
-    const maxScore = parseFloat(document.getElementById('categoryMaxScore').value) || 100;
-    const body = isEditing 
-        ? { id: window.editingCategoryId, name, period, weight }
-        : { class_id: window.currentClassId, period, name, weight, max_score: maxScore };
-    
-    try {
-        const resp = await fetch(`api/index.php?action=${endpoint}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        
-        const data = await resp.json();
-        if (data.success) {
-            const modalEl = document.getElementById('categoryModal');
-            if (document.activeElement && modalEl.contains(document.activeElement)) {
-                document.activeElement.blur();
-            }
-            const modal = bootstrap.Modal.getInstance(modalEl);
-            modal.hide();
-            
-            // Reload everything
-            const urlParams = new URLSearchParams(window.location.search);
-            const classId = urlParams.get('id') || window.currentClassId;
-            const period = urlParams.get('period') || window.currentPeriod;
-            
-            loadCategoriesForDisplay(classId, period);
-            loadGradingSheet(classId, period);
-            
-            alert(isEditing ? 'Category updated!' : 'Category added!');
-        } else {
-            alert('Error: ' + data.message);
-        }
-    } catch (e) {
-        alert('Error saving category: ' + e.message);
-    }
-}
-
-async function deleteCategory(catId) {
-    if (!confirm('Delete this category? All grade items in this category will also be deleted.')) return;
-    
-    try {
-        const resp = await fetch('api/index.php?action=delete_category', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: catId })
-        });
-        
-        const data = await resp.json();
-        if (data.success) {
-            const urlParams = new URLSearchParams(window.location.search);
-            const classId = urlParams.get('id');
-            const period = urlParams.get('period') || 'midterm';
-            clearLocalStorageGrades(classId, period);
-            loadCategoriesForDisplay(classId, period);
-            loadGradingSheet(classId, period);
-            
-            alert('Category deleted!');
-        } else {
-            alert('Error: ' + data.message);
-        }
-    } catch (e) {
-        alert('Error deleting category: ' + e.message);
-    }
-}
-
 document.addEventListener('hide.bs.modal', function (event) {
     if (document.activeElement && event.target.contains(document.activeElement)) {
         document.activeElement.blur();
     }
 });
+
+// Perfect Score Category Toggle
+window.perfectScoreCollapsed = false;
+
+function togglePerfectScoreCategory() {
+    const body = document.getElementById('perfectScoreBody');
+    const chevron = document.getElementById('perfectScoreChevron');
+    const category = document.getElementById('perfectScoreCategory');
+    
+    window.perfectScoreCollapsed = !window.perfectScoreCollapsed;
+    
+    if (window.perfectScoreCollapsed) {
+        body.style.display = 'none';
+        chevron.style.transform = 'rotate(-90deg)';
+        category.classList.add('collapsed');
+    } else {
+        body.style.display = 'block';
+        chevron.style.transform = 'rotate(0deg)';
+        category.classList.remove('collapsed');
+    }
+}
+
+// ==========================================
+// CATEGORY MANAGEMENT
+// ==========================================
+
+let currentCategoryId = null;
+
+function showCategoryManager() {
+    document.getElementById('catMgrPeriodLabel').textContent = period.charAt(0).toUpperCase() + period.slice(1);
+    loadCategories();
+    new bootstrap.Modal(document.getElementById('categoryManagerModal')).show();
+}
+
+async function loadCategories() {
+    try {
+        const resp = await fetch(`api/index.php?action=get_categories_by_period&class_id=${classId}&period=${period}`);
+        const data = await resp.json();
+        if (!data.success) return;
+        
+        const list = document.getElementById('categoryList');
+        if (data.data.length === 0) {
+            list.innerHTML = '<li class="list-group-item text-center text-muted py-4">No categories yet. Click "Add" to create one.</li>';
+            return;
+        }
+        
+        list.innerHTML = data.data.map(cat => `
+            <li class="list-group-item d-flex justify-content-between align-items-center ${cat.id === currentCategoryId ? 'active bg-primary bg-opacity-10' : ''}" 
+                onclick="selectCategory(${cat.id}, '${cat.name}', ${cat.weight_percent})">
+                <div>
+                    <div class="fw-bold">${cat.name}</div>
+                    <small class="text-muted">${cat.weight_percent}% weight</small>
+                </div>
+                <div class="d-flex gap-1">
+                    <button class="btn btn-sm btn-outline-primary" onclick="event.stopPropagation(); editCategory(${cat.id}, '${cat.name}', ${cat.weight_percent}, ${cat.sort_order})" title="Edit">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="event.stopPropagation(); deleteCategory(${cat.id})" title="Delete">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </li>
+        `).join('');
+        
+        // Auto-select first category if none selected
+        if (currentCategoryId === null && data.data.length > 0) {
+            selectCategory(data.data[0].id, data.data[0].name, data.data[0].weight_percent);
+        }
+    } catch (e) {
+        console.error('Error loading categories:', e);
+    }
+}
+
+function selectCategory(categoryId, categoryName, categoryWeight) {
+    currentCategoryId = categoryId;
+    document.getElementById('selectedCategoryTitle').textContent = `Grade Items - ${categoryName} (${categoryWeight}%)`;
+    document.getElementById('addItemBtn').style.display = 'inline-flex';
+    document.getElementById('gradeItemCategoryId').value = categoryId;
+    
+    // Update active state in list
+    document.querySelectorAll('#categoryList .list-group-item').forEach(item => {
+        item.classList.remove('active', 'bg-primary', 'bg-opacity-10');
+    });
+    event?.target.closest('.list-group-item')?.classList.add('active', 'bg-primary', 'bg-opacity-10');
+    
+    loadItems(categoryId);
+}
+
+async function loadItems(categoryId) {
+    try {
+        const resp = await fetch(`api/index.php?action=get_grade_items_by_category&category_id=${categoryId}`);
+        const data = await resp.json();
+        
+        const tbody = document.querySelector('#itemsTable tbody');
+        if (!data.success || !data.data || data.data.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-4">No items in this category. Click "Add Item" to create one.</td></tr>';
+            return;
+        }
+        
+        tbody.innerHTML = data.data.map((item, idx) => `
+            <tr>
+                <td>${idx + 1}</td>
+                <td>${item.label}</td>
+                <td>${item.max_score}</td>
+                <td>${item.sort_order}</td>
+                <td>
+                    <button class="btn btn-sm btn-outline-primary" onclick="editGradeItem(${item.id}, '${item.label}', ${item.max_score}, ${item.sort_order})" title="Edit">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteGradeItem(${item.id})" title="Delete">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+    } catch (e) {
+        console.error('Error loading items:', e);
+    }
+}
+
+function showAddCategoryModal() {
+    document.getElementById('categoryId').value = '';
+    document.getElementById('categoryName').value = '';
+    document.getElementById('categoryWeight').value = '';
+    document.getElementById('categorySort').value = '0';
+    document.getElementById('categoryModalTitle').textContent = 'Add Category';
+    new bootstrap.Modal(document.getElementById('categoryModal')).show();
+}
+
+function editCategory(id, name, weight, sort) {
+    document.getElementById('categoryId').value = id;
+    document.getElementById('categoryName').value = name;
+    document.getElementById('categoryWeight').value = weight;
+    document.getElementById('categorySort').value = sort;
+    document.getElementById('categoryModalTitle').textContent = 'Edit Category';
+    new bootstrap.Modal(document.getElementById('categoryModal')).show();
+}
+
+async function saveCategory() {
+    const id = document.getElementById('categoryId').value;
+    const data = {
+        class_id: parseInt(document.getElementById('categoryClassId').value),
+        period: document.getElementById('categoryPeriod').value,
+        name: document.getElementById('categoryName').value,
+        weight_percent: parseFloat(document.getElementById('categoryWeight').value),
+        sort_order: parseInt(document.getElementById('categorySort').value)
+    };
+    
+    if (!data.name || data.weight_percent === undefined || data.weight_percent <= 0) {
+        alert('Please fill in all required fields');
+        return;
+    }
+    
+    if (id) data.id = parseInt(id);
+    
+    try {
+        const action = id ? 'update_category' : 'add_category';
+        const resp = await fetch(`api/index.php?action=${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await resp.json();
+        if (result.success) {
+            alert(id ? 'Category updated!' : 'Category added!');
+            bootstrap.Modal.getInstance(document.getElementById('categoryModal')).hide();
+            loadCategories();
+            loadGradingSheet(classId, period); // Refresh grading sheet
+        } else {
+            alert('Error: ' + result.message);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function deleteCategory(id) {
+    if (!confirm('Delete this category and all its items/grades?')) return;
+    
+    try {
+        const resp = await fetch('api/index.php?action=delete_category', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            alert('Category deleted!');
+            currentCategoryId = null;
+            loadCategories();
+            loadGradingSheet(classId, period);
+        } else {
+            alert('Error: ' + result.message);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+function showAddItemModal() {
+    if (!currentCategoryId) {
+        alert('Please select a category first');
+        return;
+    }
+    document.getElementById('gradeItemId').value = '';
+    document.getElementById('gradeItemCategoryId').value = currentCategoryId;
+    document.getElementById('gradeItemLabel').value = '';
+    document.getElementById('gradeItemMaxScore').value = '';
+    document.getElementById('gradeItemSort').value = '0';
+    document.getElementById('gradeItemModalTitle').textContent = 'Add Grade Item';
+    new bootstrap.Modal(document.getElementById('gradeItemModal')).show();
+}
+
+function editGradeItem(id, label, maxScore, sort) {
+    document.getElementById('gradeItemId').value = id;
+    document.getElementById('gradeItemCategoryId').value = currentCategoryId;
+    document.getElementById('gradeItemLabel').value = label;
+    document.getElementById('gradeItemMaxScore').value = maxScore;
+    document.getElementById('gradeItemSort').value = sort;
+    document.getElementById('gradeItemModalTitle').textContent = 'Edit Grade Item';
+    new bootstrap.Modal(document.getElementById('gradeItemModal')).show();
+}
+
+async function saveGradeItem() {
+    const id = document.getElementById('gradeItemId').value;
+    const data = {
+        category_id: parseInt(document.getElementById('gradeItemCategoryId').value),
+        label: document.getElementById('gradeItemLabel').value,
+        max_score: parseFloat(document.getElementById('gradeItemMaxScore').value),
+        sort_order: parseInt(document.getElementById('gradeItemSort').value)
+    };
+    
+    if (!data.label || !data.max_score) {
+        alert('Please fill in all required fields');
+        return;
+    }
+    
+    if (id) data.id = parseInt(id);
+    
+    try {
+        const action = id ? 'update_grade_item' : 'add_grade_item';
+        const resp = await fetch(`api/index.php?action=${action}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+        const result = await resp.json();
+        if (result.success) {
+            alert(id ? 'Item updated!' : 'Item added!');
+            bootstrap.Modal.getInstance(document.getElementById('gradeItemModal')).hide();
+            loadItems(currentCategoryId);
+            loadGradingSheet(classId, period);
+        } else {
+            alert('Error: ' + result.message);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function deleteGradeItem(id) {
+    if (!confirm('Delete this grade item and all its scores?')) return;
+    
+    try {
+        const resp = await fetch('api/index.php?action=delete_grade_item', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+        });
+        const result = await resp.json();
+        if (result.success) {
+            alert('Item deleted!');
+            loadItems(currentCategoryId);
+            loadGradingSheet(classId, period);
+        } else {
+            alert('Error: ' + result.message);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+// Make functions globally accessible
+window.showCategoryManager = showCategoryManager;
+window.loadCategories = loadCategories;
+window.selectCategory = selectCategory;
+window.loadItems = loadItems;
+window.showAddCategoryModal = showAddCategoryModal;
+window.editCategory = editCategory;
+window.saveCategory = saveCategory;
+window.deleteCategory = deleteCategory;
+window.showAddItemModal = showAddItemModal;
+window.editGradeItem = editGradeItem;
+window.saveGradeItem = saveGradeItem;
+window.deleteGradeItem = deleteGradeItem;

@@ -1269,7 +1269,7 @@ try {
             JOIN class_section cs ON gc.class_section_id = cs.id
             JOIN subject s ON cs.subject_id = s.id
             WHERE cs.faculty_id = $faculty_id
-            GROUP BY cs.id ORDER BY cs.created_at DESC LIMIT 10");
+            GROUP BY cs.id, s.code, cs.course_program, cs.year_level, cs.section ORDER BY cs.created_at DESC LIMIT 10");
         $data = $result->fetch_all(MYSQLI_ASSOC);
         foreach ($data as &$row) { $row['class_name'] = $row['code']; }
         echo ResponseAPI::success($data);
@@ -1283,7 +1283,7 @@ try {
             JOIN class_section cs ON ase.class_section_id = cs.id
             JOIN subject s ON cs.subject_id = s.id
             WHERE cs.faculty_id = $faculty_id
-            GROUP BY cs.id ORDER BY cs.created_at DESC LIMIT 8");
+            GROUP BY cs.id, s.code, cs.course_program, cs.year_level, cs.section ORDER BY cs.created_at DESC LIMIT 8");
         $data = $result->fetch_all(MYSQLI_ASSOC);
         foreach ($data as &$row) { $row['class_name'] = $row['code']; }
         echo ResponseAPI::success($data);
