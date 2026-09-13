@@ -7,7 +7,7 @@ class GradingHelper {
         return ($rawScore / $maxScore) * 50 + 50;
     }
     
-    // Grade point lookup table (Philippine 1.00-5.00 scale)
+    // Grade point lookuphhhh table (Philippine 1.00-5.00 scale)
     public static function getGradePoint($score) {
         $score = floatval($score);
         if ($score < 75) return 5.00;
