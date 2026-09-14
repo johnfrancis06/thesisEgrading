@@ -308,11 +308,9 @@ function buildStudentRow(student, configs, period) {
         
         const rawTotal = compData.raw_total || 0;
         const equivScore = perfectScore > 0 ? transmute(rawTotal, perfectScore) : 0;
-        const autoWeight = equivScore > 0 ? (equivScore / 100) * weight : 0;
-        
         html += `<td class="cell-total cell-readonly">${rawTotal > 0 ? rawTotal : ''}</td>`;
         html += `<td class="cell-equiv cell-readonly">${rawTotal > 0 ? equivScore.toFixed(2) : ''}</td>`;
-        html += `<td class="cell-weight"><input type="number" class="weight-input" data-student="${student.id}" data-component="${key}" data-max-weight="${weight}" value="${rawTotal > 0 ? autoWeight.toFixed(2) : ''}" step="0.01" min="0" max="${weight}" oninput="onWeightInput(this, ${student.id}, '${key}')" style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: #FF0000; color: #FFF;"></td>`;
+        html += `<td class="cell-weight"><input type="number" class="weight-input" data-student="${student.id}" data-component="${key}" data-max-weight="100" value="${weight.toFixed(2)}" step="0.01" min="0" max="100" oninput="onWeightInput(this, ${student.id}, '${key}')" style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: #FF0000; color: #FFF;"></td>`;
     });
     
     // Calculate initial weighted total for display
@@ -383,9 +381,6 @@ function onGradeInput(input, studentId, componentKey, subIdx) {
     }
     
     calculateRowGrades(studentId);
-    
-    // Auto-update weight input based on new equivalent
-    updateWeightFromEquiv(studentId, componentKey);
     
     const gradeItemId = input.dataset.item;
     const studentKey = `${studentId}_${componentKey}_${subIdx}`;
@@ -505,7 +500,7 @@ function calculateRowGrades(studentId) {
     
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-        const configuredWeight = config.weight_percent;
+        const configuredWeight = parseFloat(config.weight_percent) || 0;
         const perfectScore = perfectScores[key] || config.perfect_score || 100;
         
         let total = 0;
@@ -520,8 +515,8 @@ function calculateRowGrades(studentId) {
         
         // Read weight from input (editable by teacher)
         const weightInput = document.querySelector(`input.weight-input[data-student="${studentId}"][data-component="${key}"]`);
-        let weight = weightInput ? parseFloat(weightInput.value) || 0 : configuredWeight;
-        weight = weight / 100; // Convert percentage to decimal
+        const weightPercent = weightInput ? parseFloat(weightInput.value) : configuredWeight;
+        const weight = (Number.isFinite(weightPercent) ? weightPercent : configuredWeight) / 100;
         
         const weighted = equivScore * weight;
         

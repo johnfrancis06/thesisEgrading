@@ -42,8 +42,8 @@ class GradingHelper {
     
     // Calculate period grade (weighted average of 4 components)
     // Components: Class Participation (20%), Problem Set (20%), Quizzes (30%), Periodical Exam (30%)
-    public static function calculatePeriodGrade($componentScores) {
-        $weights = [
+    public static function calculatePeriodGrade($componentScores, $weights = null) {
+        $weights = $weights ?: [
             'class_participation' => 0.20,
             'problem_set' => 0.20,
             'quizzes' => 0.30,
@@ -164,9 +164,21 @@ class GradingHelper {
             }
         }
         
+        // Use the configured category weights for each period.
+        $periodWeights = ['midterm' => [], 'final' => []];
+        $weightStmt = $db->prepare("SELECT period, name, weight_percent FROM grade_category WHERE class_section_id = ?");
+        $weightStmt->bind_param("i", $classId);
+        $weightStmt->execute();
+        foreach ($weightStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $weightRow) {
+            $component = self::mapCategoryToComponent(strtolower($weightRow['name']));
+            if ($component && isset($periodWeights[$weightRow['period']])) {
+                $periodWeights[$weightRow['period']][$component] = floatval($weightRow['weight_percent']) / 100;
+            }
+        }
+
         // Calculate period grades
-        $midtermGrade = self::calculatePeriodGrade($componentScores['midterm']);
-        $finalGrade = self::calculatePeriodGrade($componentScores['final']);
+        $midtermGrade = self::calculatePeriodGrade($componentScores['midterm'], $periodWeights['midterm']);
+        $finalGrade = self::calculatePeriodGrade($componentScores['final'], $periodWeights['final']);
         $overallGrade = self::calculateOverallGrade($midtermGrade, $finalGrade);
         
         // Get grade points
