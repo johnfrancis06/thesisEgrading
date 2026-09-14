@@ -340,6 +340,7 @@ $faculty_id = $auth->getFacultyId();
             const section = document.getElementById('modalSectionSelect').value;
             const classId = document.getElementById('noStudentsModal').dataset.classId;
             const classYearLevel = document.getElementById('noStudentsModal').dataset.classYearLevel;
+            const classProgram = document.getElementById('noStudentsModal').dataset.classProgram;
             
             if (!classYearLevel) {
                 alert('Error: Class year level not found. Please refresh and try again.');
@@ -358,7 +359,7 @@ $faculty_id = $auth->getFacultyId();
             const resp = await fetch('api/index.php?action=add_section_to_class', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ class_id: classId, year_level: classYearLevel, section: section })
+                body: JSON.stringify({ class_id: classId, year_level: classYearLevel, section: section, course_program: classProgram })
             });
             const data = await resp.json();
             

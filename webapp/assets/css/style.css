@@ -2838,3 +2838,26 @@ body {
 .alert-success { background: #e5f5ee; color: #176b52; border-color: #b8dfcc; }
 .alert-warning { background: #fff5df; color: #805c16; border-color: #edd59d; }
 .alert-danger { background: #fbe8e5; color: #873f37; border-color: #edc0b9; }
+
+.student-subject-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-bottom: 0.25rem;
+}
+
+.subject-tag {
+    background: #dcecf4 !important;
+    color: #176b70 !important;
+    border: 1px solid #b9d6df;
+    font-size: 0.7rem;
+}
+
+.student-subject-count,
+.student-class-line,
+.student-year-line {
+    display: block;
+    color: var(--gray-500);
+    font-size: 0.75rem;
+    line-height: 1.55;
+}

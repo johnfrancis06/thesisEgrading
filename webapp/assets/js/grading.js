@@ -301,6 +301,7 @@ function buildStudentRow(student, configs, period) {
                        value="${score !== '' ? score : ''}" 
                        step="1" min="0" max="${maxScore}"
                        oninput="onGradeInput(this, ${student.id}, '${key}', ${idx})"
+                       onchange="saveGradeInput(this)"
                        style="width: 100%; padding: 4px 6px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: white;">
             </td>`;
         });
@@ -338,6 +339,33 @@ return html;
      
 const saveTimers = {};
 
+async function saveGradeInput(input) {
+    const gradeItemId = parseInt(input.dataset.item, 10);
+    const studentId = parseInt(input.dataset.student, 10);
+    if (!gradeItemId || !studentId) return;
+
+    const maxScore = parseFloat(input.dataset.max) || 100;
+    const rawScore = Math.min(Math.max(parseFloat(input.value) || 0, 0), maxScore);
+    input.value = Math.round(rawScore);
+
+    try {
+        const resp = await fetch('api/index.php?action=save_grade', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+                item_id: gradeItemId,
+                student_id: studentId,
+                raw_score: input.value
+            })
+        });
+        const data = await resp.json();
+        if (!data.success) console.error('Save failed:', data.message);
+    } catch (e) {
+        console.error('Error saving grade:', e);
+    }
+}
+
 function onGradeInput(input, studentId, componentKey, subIdx) {
     // Clamp value to max
     const maxScore = parseFloat(input.dataset.max) || 100;
@@ -369,24 +397,7 @@ function onGradeInput(input, studentId, componentKey, subIdx) {
     // Only save if we have a valid grade_item_id (not 'new')
     if (gradeItemId !== 'new' && parseInt(gradeItemId) > 0) {
         saveTimers[studentKey] = setTimeout(async () => {
-            try {
-                const resp = await fetch('api/index.php?action=save_grade', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'include',
-                    body: JSON.stringify({ 
-                        grade_item_id: parseInt(gradeItemId), 
-                        student_id: studentId, 
-                        raw_score: clamped 
-                    })
-                });
-                const data = await resp.json();
-                if (!data.success) {
-                    console.error('Save failed:', data.message);
-                }
-            } catch (e) {
-                console.error('Error saving grade:', e);
-            }
+            await saveGradeInput(input);
         }, 500);
     }
 }
@@ -618,10 +629,10 @@ function attachRowHoverEffects() {
     });
 }
 
-// Transmutation formula: (raw/max)*50+50
+// Equivalent score as a percentage of the configured perfect score.
 function transmute(raw, max) {
     if (max <= 0) return 0;
-    return (raw / max) * 50 + 50;
+    return (raw / max) * 100;
 }
 
 // Grade point lookup (for reference)

@@ -129,9 +129,9 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
                                 <th>Last Name</th>
                                 <th>First Name</th>
                                 <th>Middle Initial</th>
-                                <th>Subject</th>
-                                <th>Class</th>
-                                <th>AY</th>
+                                <th>Subjects Enrolled</th>
+                                <th>Classes</th>
+                                <th>Academic Years</th>
                             </tr>
                         </thead>
                         <tbody id="studentsList">
@@ -226,15 +226,21 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
                         </tr>
                     `).join('');
                 } else {
-                    html = data.data.map(s => `
+                    const groupedStudents = groupStudentsByNumber(data.data);
+                    html = groupedStudents.map(s => `
                         <tr>
-                            <td><strong>${s.student_no}</strong></td>
-                            <td>${s.last_name}</td>
-                            <td>${s.first_name}</td>
-                            <td>${s.middle_initial || '-'}</td>
-                            <td><span class="badge badge-primary">${s.code || ''}</span></td>
-                            <td>${s.course_program || ''} Yr${s.year_level || ''}-${s.section || ''}</td>
-                            <td>${s.academic_year || ''}</td>
+                            <td><strong>${escapeStudentHtml(s.student_no)}</strong></td>
+                            <td>${escapeStudentHtml(s.last_name)}</td>
+                            <td>${escapeStudentHtml(s.first_name)}</td>
+                            <td>${escapeStudentHtml(s.middle_initial || '-')}</td>
+                            <td>
+                                <div class="student-subject-tags">
+                                    ${s.subjects.map(subject => `<span class="badge badge-primary subject-tag">${escapeStudentHtml(subject)}</span>`).join('')}
+                                </div>
+                                <small class="student-subject-count">${s.subjects.length} subject${s.subjects.length === 1 ? '' : 's'}</small>
+                            </td>
+                            <td>${s.classes.map(item => `<span class="student-class-line">${escapeStudentHtml(item)}</span>`).join('')}</td>
+                            <td>${s.academicYears.map(year => `<span class="student-year-line">${escapeStudentHtml(year)}</span>`).join('')}</td>
                         </tr>
                     `).join('');
                 }
@@ -242,6 +248,36 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
                 html = '<tr><td colspan="' + (classId ? '4' : '7') + '" class="text-center py-4 text-muted">No students found</td></tr>';
             }
             document.getElementById('studentsList').innerHTML = html;
+        }
+
+        function groupStudentsByNumber(students) {
+            const grouped = new Map();
+            students.forEach(student => {
+                const key = student.student_no;
+                if (!grouped.has(key)) {
+                    grouped.set(key, {
+                        student_no: student.student_no,
+                        last_name: student.last_name,
+                        first_name: student.first_name,
+                        middle_initial: student.middle_initial,
+                        subjects: [],
+                        classes: [],
+                        academicYears: []
+                    });
+                }
+                const item = grouped.get(key);
+                if (student.code && !item.subjects.includes(student.code)) item.subjects.push(student.code);
+                const classLabel = `${student.course_program || ''} Yr${student.year_level || ''}-${student.section || ''}`.trim();
+                if (classLabel && !item.classes.includes(classLabel)) item.classes.push(classLabel);
+                if (student.academic_year && !item.academicYears.includes(student.academic_year)) item.academicYears.push(student.academic_year);
+            });
+            return Array.from(grouped.values());
+        }
+
+        function escapeStudentHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, character => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+            }[character]));
         }
         
         const currentClassId = <?= $classId ?>;

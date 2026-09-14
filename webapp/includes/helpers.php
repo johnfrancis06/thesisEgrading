@@ -1,10 +1,10 @@
 <?php
 
 class GradingHelper {
-    // Transmutation formula: (raw/max)*50+50
+    // Equivalent score is the raw score expressed as a percentage of the perfect score.
     public static function transmute($rawScore, $maxScore) {
         if ($maxScore <= 0) return 0;
-        return ($rawScore / $maxScore) * 50 + 50;
+        return ($rawScore / $maxScore) * 100;
     }
     
     // Grade point lookuphhhh table (Philippine 1.00-5.00 scale)

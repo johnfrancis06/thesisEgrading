@@ -142,7 +142,7 @@ try {
         $section = $db->real_escape_string($data['section']);
 
         // Get class info to validate year level
-        $class = $db->query("SELECT year_level, course_program, section, academic_year FROM class_section WHERE id = $classId")->fetch_assoc();
+        $class = $db->query("SELECT year_level, course_program, section, academic_year FROM class_section WHERE id = $classId AND faculty_id = $faculty_id")->fetch_assoc();
         if (!$class) {
             echo ResponseAPI::error("Class not found");
             exit;
@@ -154,14 +154,26 @@ try {
             exit;
         }
 
-        // Get all students from this section using student table (match year + section only)
-        $stmt = $db->prepare("SELECT DISTINCT s.student_no, s.last_name, s.first_name, s.middle_initial
-            FROM student s
-            JOIN class_section cs ON s.class_section_id = cs.id
-            WHERE cs.faculty_id = ? AND cs.year_level = ? AND cs.section = ?");
-        $stmt->bind_param("isi", $faculty_id, $yearLevel, $section);
+        // Use the canonical enrollment roster so the same student can be copied
+        // into every subject class in the section.
+        $program = $db->real_escape_string($data['course_program'] ?? $class['course_program']);
+        $academicYear = $db->real_escape_string($class['academic_year']);
+        $stmt = $db->prepare("SELECT DISTINCT student_no, last_name, first_name, middle_initial
+            FROM section_student
+            WHERE course_program = ? AND year_level = ? AND section = ? AND academic_year = ?");
+        $stmt->bind_param("siss", $program, $yearLevel, $section, $academicYear);
         $stmt->execute();
         $students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        // Support older installations whose students were never copied to section_student.
+        if (empty($students)) {
+            $stmt = $db->prepare("SELECT DISTINCT s.student_no, s.last_name, s.first_name, s.middle_initial
+                FROM student s JOIN class_section cs ON s.class_section_id = cs.id
+                WHERE cs.faculty_id = ? AND cs.course_program = ? AND cs.year_level = ? AND cs.section = ? AND cs.academic_year = ?");
+            $stmt->bind_param("isiss", $faculty_id, $program, $yearLevel, $section, $academicYear);
+            $stmt->execute();
+            $students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        }
 
         if (empty($students)) {
             echo ResponseAPI::error("No students found in this section");
@@ -209,14 +221,23 @@ try {
             exit;
         }
         
-        // Get all students from this section using student table (match year + section only)
-        $stmt = $db->prepare("SELECT DISTINCT s.student_no, s.last_name, s.first_name, s.middle_initial
-            FROM student s
-            JOIN class_section cs ON s.class_section_id = cs.id
-            WHERE cs.faculty_id = ? AND cs.year_level = ? AND cs.section = ?");
-        $stmt->bind_param("isi", $faculty_id, $yearLevel, $section);
+        // Read from the shared section roster so one section can be enrolled
+        // in multiple subject classes.
+        $stmt = $db->prepare("SELECT DISTINCT student_no, last_name, first_name, middle_initial
+            FROM section_student
+            WHERE course_program = ? AND year_level = ? AND section = ? AND academic_year = ?");
+        $stmt->bind_param("siss", $program, $yearLevel, $section, $academicYear);
         $stmt->execute();
         $students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+
+        if (empty($students)) {
+            $stmt = $db->prepare("SELECT DISTINCT s.student_no, s.last_name, s.first_name, s.middle_initial
+                FROM student s JOIN class_section cs ON s.class_section_id = cs.id
+                WHERE cs.faculty_id = ? AND cs.course_program = ? AND cs.year_level = ? AND cs.section = ? AND cs.academic_year = ?");
+            $stmt->bind_param("isiss", $faculty_id, $program, $yearLevel, $section, $academicYear);
+            $stmt->execute();
+            $students = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        }
         
         if (empty($students)) {
             echo ResponseAPI::error("No students found in this section");
@@ -528,9 +549,14 @@ try {
     }
     elseif ($action === 'save_grade') {
         $data = json_decode(file_get_contents("php://input"), true);
-        $itemId = intval($data['item_id']);
+        $itemId = intval($data['item_id'] ?? $data['grade_item_id'] ?? 0);
         $studentId = intval($data['student_id']);
         $rawScore = round(floatval($data['raw_score'] ?? 0));
+
+        if ($itemId <= 0 || $studentId <= 0) {
+            echo ResponseAPI::error("Invalid grade item or student");
+            exit;
+        }
         
         $maxResult = $db->query("SELECT max_score FROM grade_item WHERE id = $itemId")->fetch_assoc();
         $maxScore = $maxResult ? floatval($maxResult['max_score']) : 100;
@@ -1592,7 +1618,17 @@ try {
         // Insert new configs
         $sortOrder = 0;
         foreach ($configs as $config) {
-            $templateId = intval($config['template_id'] ?? 0);
+            $templateId = isset($config['template_id']) && intval($config['template_id']) > 0
+                ? intval($config['template_id'])
+                : null;
+            if ($templateId !== null) {
+                $templateCheck = $db->prepare("SELECT id FROM grade_category_template WHERE id = ? AND is_active = TRUE");
+                $templateCheck->bind_param("i", $templateId);
+                $templateCheck->execute();
+                if (!$templateCheck->get_result()->fetch_assoc()) {
+                    $templateId = null;
+                }
+            }
             $customName = trim($config['custom_name'] ?? '');
             $weight = floatval($config['weight_percent'] ?? 0);
             $perfectScore = floatval($config['perfect_score'] ?? 0);
@@ -1604,8 +1640,11 @@ try {
                 INSERT INTO grade_category_config (class_section_id, period, template_id, custom_name, weight_percent, perfect_score, item_count, sort_order, is_visible)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $stmt->bind_param("isssddiii", $classId, $period, $templateId, $customName, $weight, $perfectScore, $itemCount, $sortOrder, $isVisible);
-            $stmt->execute();
+            $stmt->bind_param("isisddiii", $classId, $period, $templateId, $customName, $weight, $perfectScore, $itemCount, $sortOrder, $isVisible);
+            if (!$stmt->execute()) {
+                echo ResponseAPI::error("Failed to save category: " . $stmt->error, 500);
+                exit;
+            }
             
             $configId = $db->insert_id;
             
