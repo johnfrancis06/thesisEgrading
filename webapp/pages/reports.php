@@ -21,7 +21,7 @@ if ($classId <= 0) {
     <title><?= $classId <= 0 ? 'Select a Class' : 'Reports - ' . htmlspecialchars($class['code']) ?> - <?= APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=4">
+    <link rel="stylesheet" href="assets/css/style.css?v=8">
 </head>
 <body>
     <?php include 'includes/header.php'; ?>

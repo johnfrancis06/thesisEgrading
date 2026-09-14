@@ -55,7 +55,7 @@ $attOverview = $db->query("SELECT
     <title>Dashboard - <?= APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=6">
+    <link rel="stylesheet" href="assets/css/style.css?v=8">
 </head>
 <body>
     <?php include 'includes/header.php'; ?>
@@ -254,53 +254,26 @@ $attOverview = $db->query("SELECT
                 </section>
             </div>
             
-            <!-- Charts Row -->
-            <section class="charts-grid">
-                <article class="dashboard-card chart-card">
-                    <header class="card-header-modern">
-                        <h2><i class="bi bi-pie-chart"></i> Grade Distribution</h2>
-                    </header>
-                    <div class="card-body-modern">
-                        <div class="chart-wrapper" style="height: 280px; position: relative;">
-                            <canvas id="gradeChart"></canvas>
+            <section class="activity-workspace" aria-label="Activity graph">
+                <div class="activity-toolbar">
+                    <div>
+                        <span class="activity-eyebrow"><i class="bi bi-activity"></i> Live activity</span>
+                        <h2>Attendance rhythm</h2>
+                        <p>Track student check-ins across your classes over time.</p>
+                    </div>
+                    <div class="activity-controls">
+                        <span class="activity-total"><strong id="activityTotal">0</strong> check-ins</span>
+                        <div class="range-switcher" role="group" aria-label="Activity range">
+                            <button type="button" class="range-btn" data-range="7">7D</button>
+                            <button type="button" class="range-btn active" data-range="30">30D</button>
+                            <button type="button" class="range-btn" data-range="all">All</button>
                         </div>
                     </div>
-                </article>
-                
-                <article class="dashboard-card chart-card">
-                    <header class="card-header-modern">
-                        <h2><i class="bi bi-bar-chart"></i> Class Averages</h2>
-                    </header>
-                    <div class="card-body-modern">
-                        <div class="chart-wrapper" style="height: 280px; position: relative;">
-                            <canvas id="avgChart"></canvas>
-                        </div>
-                    </div>
-                </article>
-            </section>
-            
-            <section class="charts-grid">
-                <article class="dashboard-card chart-card">
-                    <header class="card-header-modern">
-                        <h2><i class="bi bi-graph-up"></i> Attendance by Class</h2>
-                    </header>
-                    <div class="card-body-modern">
-                        <div class="chart-wrapper" style="height: 280px; position: relative;">
-                            <canvas id="attendanceChart"></canvas>
-                        </div>
-                    </div>
-                </article>
-                
-                <article class="dashboard-card chart-card">
-                    <header class="card-header-modern">
-                        <h2><i class="bi bi-activity"></i> Daily Attendance Trend</h2>
-                    </header>
-                    <div class="card-body-modern">
-                        <div class="chart-wrapper" style="height: 280px; position: relative;">
-                            <canvas id="dailyAttendanceChart"></canvas>
-                        </div>
-                    </div>
-                </article>
+                </div>
+                <div class="activity-plot">
+                    <canvas id="dailyAttendanceChart"></canvas>
+                </div>
+                <div class="activity-footer"><i class="bi bi-arrow-up-right"></i><span id="activitySummary">Loading activity...</span></div>
             </section>
             
             <!-- Department Overview -->
@@ -501,16 +474,28 @@ $attOverview = $db->query("SELECT
             const data = await resp.json();
             if (!data.success || !data.data) return;
             
+            window.dashboardActivityData = data.data;
+            renderActivityChart(30);
+        }
+
+        function renderActivityChart(range) {
             const grouped = {};
-            data.data.forEach(d => {
+            const source = window.dashboardActivityData || [];
+            const filtered = range === 'all' ? source : source.slice(-range);
+            filtered.forEach(d => {
                 if (!grouped[d.attendance_date]) grouped[d.attendance_date] = 0;
-                grouped[d.attendance_date] += d.students_present || 0;
+                grouped[d.attendance_date] += parseInt(d.students_present, 10) || 0;
             });
             
             const labels = Object.keys(grouped).sort();
             const values = labels.map(d => grouped[d]);
+            const total = values.reduce((sum, value) => sum + value, 0);
             const ctx = document.getElementById('dailyAttendanceChart');
             if (!ctx) return;
+            document.getElementById('activityTotal').textContent = total;
+            document.getElementById('activitySummary').textContent = values.length
+                ? `${Math.max(...values)} students present on the busiest day`
+                : 'No attendance activity recorded yet';
             
             if (window.dailyChartInstance) window.dailyChartInstance.destroy();
             window.dailyChartInstance = new Chart(ctx, {
@@ -520,13 +505,13 @@ $attOverview = $db->query("SELECT
                     datasets: [{
                         label: 'Students Present',
                         data: values,
-                        borderColor: '#0ea5e9',
-                        backgroundColor: 'rgba(14, 165, 233, 0.1)',
+                        borderColor: '#ff7a59',
+                        backgroundColor: 'rgba(255, 122, 89, 0.16)',
                         fill: true,
-                        tension: 0.4,
-                        pointRadius: 5,
-                        pointHoverRadius: 7,
-                        pointBackgroundColor: '#0ea5e9',
+                        tension: 0.35,
+                        pointRadius: 4,
+                        pointHoverRadius: 8,
+                        pointBackgroundColor: '#ffd166',
                         pointBorderColor: '#fff',
                         pointBorderWidth: 2,
                     }]
@@ -534,13 +519,14 @@ $attOverview = $db->query("SELECT
                 options: {
                     responsive: true,
                     maintainAspectRatio: true,
-                    plugins: { legend: { display: false } },
+                    plugins: { legend: { display: false }, tooltip: { displayColors: false } },
                     scales: { 
                         y: { 
                             beginAtZero: true,
-                            grid: { color: 'rgba(0,0,0,0.05)' }
+                            grid: { color: 'rgba(255,255,255,0.12)' },
+                            ticks: { color: 'rgba(255,255,255,0.72)', precision: 0 }
                         },
-                        x: { grid: { display: false } }
+                        x: { grid: { display: false }, ticks: { color: 'rgba(255,255,255,0.72)' } }
                     },
                     interaction: { intersect: false, mode: 'index' }
                 }
@@ -549,10 +535,14 @@ $attOverview = $db->query("SELECT
         
         async function initDashboard() {
             await loadAttendanceReview();
-            await loadGradeChart();
-            await loadAvgChart();
-            await loadAttendanceChart();
             await loadDailyAttendanceChart();
+            document.querySelectorAll('.range-btn').forEach(button => {
+                button.addEventListener('click', () => {
+                    document.querySelectorAll('.range-btn').forEach(item => item.classList.remove('active'));
+                    button.classList.add('active');
+                    renderActivityChart(button.dataset.range === 'all' ? 'all' : parseInt(button.dataset.range, 10));
+                });
+            });
         }
         
         initDashboard();
