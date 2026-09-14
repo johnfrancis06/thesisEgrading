@@ -1239,23 +1239,13 @@ try {
             exit;
         }
         
-        $program = $db->real_escape_string($data['course_program']);
-        $year = intval($data['year_level']);
-        $section = $db->real_escape_string($data['section']);
-        $ay = $db->real_escape_string($data['academic_year']);
-        
         $stmt = $db->prepare("UPDATE student SET last_name = ?, first_name = ?, middle_initial = ?, student_no = ? 
             WHERE id = ?");
         $stmt->bind_param("ssssi", $data['last_name'], $data['first_name'], $data['middle_initial'], $data['student_no'], $id);
-        $stmt->execute();
-        
-        $oldStudentNo = $db->real_escape_string($current['student_no']);
-        $db->query("UPDATE student s 
-            JOIN class_section cs ON s.class_section_id = cs.id 
-            SET s.student_no = '{$data['student_no']}', s.last_name = '{$data['last_name']}', 
-                s.first_name = '{$data['first_name']}', s.middle_initial = '{$data['middle_initial']}'
-            WHERE cs.course_program = '$program' AND cs.year_level = $year AND cs.section = '$section' 
-                AND cs.academic_year = '$ay' AND s.student_no = '$oldStudentNo'");
+        if (!$stmt->execute()) {
+            echo ResponseAPI::error("Failed to update student: " . $stmt->error);
+            exit;
+        }
         
         echo ResponseAPI::success([], "Student updated");
     }
