@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS attendance_record (
 
 CREATE TABLE IF NOT EXISTS section_student (
     id INT PRIMARY KEY AUTO_INCREMENT,
+    faculty_id INT NOT NULL,
     course_program VARCHAR(100),
     year_level INT,
     section VARCHAR(50),
@@ -133,8 +134,10 @@ CREATE TABLE IF NOT EXISTS section_student (
     middle_initial VARCHAR(5),
     student_no VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (faculty_id) REFERENCES faculty(id) ON DELETE CASCADE,
     INDEX idx_section (year_level, section, academic_year),
-    INDEX idx_student_no (student_no)
+    INDEX idx_student_no (student_no),
+    UNIQUE KEY unique_faculty_section_student (faculty_id, course_program, year_level, section, academic_year, student_no)
 );
 
 CREATE TABLE IF NOT EXISTS audit_log (

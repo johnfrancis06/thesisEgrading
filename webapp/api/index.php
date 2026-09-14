@@ -1017,12 +1017,11 @@ try {
         $section = $_GET['section'] ?? '';
         $ay = $_GET['ay'] ?? '';
         
-        $query = "SELECT cs.course_program, cs.year_level, cs.section, cs.academic_year,
-                  COUNT(DISTINCT s.student_no) as count
-                  FROM class_section cs
-                  LEFT JOIN student s ON cs.id = s.class_section_id
-                  WHERE cs.faculty_id = ?
-                  GROUP BY cs.course_program, cs.year_level, cs.section, cs.academic_year
+        $query = "SELECT ss.course_program, ss.year_level, ss.section, ss.academic_year,
+              COUNT(DISTINCT ss.student_no) as count
+              FROM section_student ss
+              WHERE ss.faculty_id = ?
+              GROUP BY ss.course_program, ss.year_level, ss.section, ss.academic_year
                   ORDER BY cs.academic_year DESC";
         
         $stmt = $db->prepare($query);
@@ -1043,12 +1042,11 @@ try {
         echo ResponseAPI::success($result);
     }
     elseif ($action === 'get_enrolled_sections') {
-        $sections = $db->query("SELECT DISTINCT cs.course_program, cs.year_level, cs.section, cs.academic_year, 
-            COUNT(DISTINCT s.student_no) as count
-            FROM class_section cs
-            LEFT JOIN student s ON cs.id = s.class_section_id
-            WHERE cs.faculty_id = $faculty_id
-            GROUP BY cs.course_program, cs.year_level, cs.section, cs.academic_year
+        $sections = $db->query("SELECT DISTINCT ss.course_program, ss.year_level, ss.section, ss.academic_year,
+            COUNT(DISTINCT ss.student_no) as count
+            FROM section_student ss
+            WHERE ss.faculty_id = $faculty_id
+            GROUP BY ss.course_program, ss.year_level, ss.section, ss.academic_year
             ORDER BY cs.year_level ASC, cs.section ASC")->fetch_all(MYSQLI_ASSOC);
         echo ResponseAPI::success($sections);
     }
@@ -1086,21 +1084,20 @@ try {
         $section = $_GET['section'] ?? '';
         $ay = $_GET['ay'] ?? '';
         
-        $query = "SELECT MIN(s.id) as id, s.student_no, s.last_name, s.first_name, s.middle_initial,
-                  cs.course_program, cs.year_level, cs.section, cs.academic_year
-                  FROM student s
-                  JOIN class_section cs ON s.class_section_id = cs.id
-                  WHERE cs.faculty_id = ?";
+        $query = "SELECT ss.id, ss.student_no, ss.last_name, ss.first_name, ss.middle_initial,
+              ss.course_program, ss.year_level, ss.section, ss.academic_year
+              FROM section_student ss
+              WHERE ss.faculty_id = ?";
         $params = [];
         $types = 'i';
         $params[] = $faculty_id;
         
-        if ($program) { $query .= " AND cs.course_program = ?"; $params[] = $program; $types .= 's'; }
-        if ($year) { $query .= " AND cs.year_level = ?"; $params[] = $year; $types .= 'i'; }
-        if ($section) { $query .= " AND cs.section = ?"; $params[] = $section; $types .= 's'; }
-        if ($ay) { $query .= " AND cs.academic_year = ?"; $params[] = $ay; $types .= 's'; }
+        if ($program) { $query .= " AND ss.course_program = ?"; $params[] = $program; $types .= 's'; }
+        if ($year) { $query .= " AND ss.year_level = ?"; $params[] = $year; $types .= 'i'; }
+        if ($section) { $query .= " AND ss.section = ?"; $params[] = $section; $types .= 's'; }
+        if ($ay) { $query .= " AND ss.academic_year = ?"; $params[] = $ay; $types .= 's'; }
         
-        $query .= " GROUP BY s.student_no ORDER BY s.last_name";
+        $query .= " ORDER BY ss.last_name";
         
         $stmt = $db->prepare($query);
         $stmt->bind_param($types, ...$params);
@@ -1122,56 +1119,22 @@ try {
         $year = intval($data['year_level']);
         $section = $db->real_escape_string($data['section']);
         $ay = $db->real_escape_string($data['academic_year']);
+
+        $roster = $db->prepare("INSERT INTO section_student
+            (faculty_id, course_program, year_level, section, academic_year, last_name, first_name, middle_initial, student_no)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE last_name = VALUES(last_name), first_name = VALUES(first_name), middle_initial = VALUES(middle_initial)");
+        $roster->bind_param("isissssss", $faculty_id, $program, $year, $section, $ay, $data['last_name'], $data['first_name'], $data['middle_initial'], $data['student_no']);
+        if (!$roster->execute()) {
+            echo ResponseAPI::error("Failed to save section roster: " . $roster->error, 500);
+            exit;
+        }
         
         // Find matching classes for this section
         // Only use classes owned by the current faculty. A student number may
         // legitimately exist in different faculty users' class rosters.
         $classes = $db->query("SELECT id FROM class_section 
             WHERE faculty_id = $faculty_id AND course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'")->fetch_all(MYSQLI_ASSOC);
-        
-        // If no matching class exists, create a default one
-        if (empty($classes)) {
-            // Get or create a default subject (use INSERT IGNORE to prevent duplicates)
-            $defaultSubject = $db->query("SELECT id FROM subject WHERE code = 'GEN' LIMIT 1")->fetch_assoc();
-            if (!$defaultSubject) {
-                $db->query("INSERT IGNORE INTO subject (code, title, default_units) VALUES ('GEN', 'General Enrollment', 3)");
-                $defaultSubject = $db->query("SELECT id FROM subject WHERE code = 'GEN' LIMIT 1")->fetch_assoc();
-            }
-            $subjectId = $defaultSubject ? $defaultSubject['id'] : null;
-            if (!$subjectId) {
-                echo ResponseAPI::error("Failed to get or create default subject");
-                exit;
-            }
-            
-            // Create the class
-            $stmt = $db->prepare("INSERT INTO class_section 
-                (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)");
-            $semester = 1;
-            $stmt->bind_param("iisisis", $subjectId, $faculty_id, $program, $year, $section, $semester, $ay);
-            if ($stmt->execute()) {
-                $classId = $db->insert_id;
-                $classes = [['id' => $classId]];
-                
-                // Create default grade categories
-                $categories = [
-                    ['midterm', 'Class Standing', 20],
-                    ['midterm', 'Quizzes', 30],
-                    ['midterm', 'Exam', 50],
-                    ['final', 'Class Standing', 20],
-                    ['final', 'Quizzes', 30],
-                    ['final', 'Exam', 50]
-                ];
-                foreach ($categories as $cat) {
-                    $stmt2 = $db->prepare("INSERT INTO grade_category (class_section_id, period, name, weight_percent) VALUES (?, ?, ?, ?)");
-                    $stmt2->bind_param("issi", $classId, $cat[0], $cat[1], $cat[2]);
-                    $stmt2->execute();
-                }
-            } else {
-                echo ResponseAPI::error("Failed to create class: " . $db->error);
-                exit;
-            }
-        }
         
         $enrolledCount = 0;
         $skippedCount = 0;
@@ -1199,7 +1162,9 @@ try {
         
         $message = $enrolledCount > 0
             ? "Student enrolled in $enrolledCount class(es)"
-            : "Student already enrolled; no duplicate was created";
+            : (empty($classes)
+                ? "Student saved to the section roster; no subject class is currently assigned"
+                : "Student already enrolled; no duplicate was created");
         if ($skippedCount > 0) {
             $message .= " ($skippedCount existing class enrollment(s) skipped)";
         }
@@ -1212,10 +1177,8 @@ try {
         $data = json_decode(file_get_contents("php://input"), true);
         $id = intval($data['id']);
         
-        $stmt = $db->prepare("SELECT s.student_no, cs.course_program, cs.year_level, cs.section, cs.academic_year 
-            FROM student s 
-            JOIN class_section cs ON s.class_section_id = cs.id 
-            WHERE s.id = ? AND cs.faculty_id = ?");
+        $stmt = $db->prepare("SELECT student_no, course_program, year_level, section, academic_year
+            FROM section_student WHERE id = ? AND faculty_id = ?");
         $stmt->bind_param("ii", $id, $faculty_id);
         $stmt->execute();
         $current = $stmt->get_result()->fetch_assoc();
@@ -1225,15 +1188,16 @@ try {
             exit;
         }
         
-        $program = $db->real_escape_string($current['course_program']);
-        $year = intval($current['year_level']);
-        $section = $db->real_escape_string($current['section']);
-        $ay = $db->real_escape_string($current['academic_year']);
-        
-        $db->query("DELETE s FROM student s
+        $delete = $db->prepare("DELETE FROM section_student WHERE id = ? AND faculty_id = ?");
+        $delete->bind_param("ii", $id, $faculty_id);
+        $delete->execute();
+
+        $deleteCopies = $db->prepare("DELETE s FROM student s
             JOIN class_section cs ON s.class_section_id = cs.id
-            WHERE s.student_no = '{$current['student_no']}'
-            AND cs.course_program = '$program' AND cs.year_level = $year AND cs.section = '$section' AND cs.academic_year = '$ay'");
+            WHERE s.student_no = ? AND cs.faculty_id = ? AND cs.course_program = ?
+            AND cs.year_level = ? AND cs.section = ? AND cs.academic_year = ?");
+        $deleteCopies->bind_param("sisiss", $current['student_no'], $faculty_id, $current['course_program'], $current['year_level'], $current['section'], $current['academic_year']);
+        $deleteCopies->execute();
         
         echo ResponseAPI::success([], "Student removed");
     }
@@ -1241,10 +1205,8 @@ try {
         $data = json_decode(file_get_contents("php://input"), true);
         $id = intval($data['id']);
         
-        $stmt = $db->prepare("SELECT s.student_no, cs.course_program, cs.year_level, cs.section, cs.academic_year 
-            FROM student s 
-            JOIN class_section cs ON s.class_section_id = cs.id 
-            WHERE s.id = ? AND cs.faculty_id = ?");
+        $stmt = $db->prepare("SELECT student_no, course_program, year_level, section, academic_year
+            FROM section_student WHERE id = ? AND faculty_id = ?");
         $stmt->bind_param("ii", $id, $faculty_id);
         $stmt->execute();
         $current = $stmt->get_result()->fetch_assoc();
@@ -1253,10 +1215,10 @@ try {
             echo ResponseAPI::error("Student not found");
             exit;
         }
-        
-        $stmt = $db->prepare("UPDATE student SET last_name = ?, first_name = ?, middle_initial = ?, student_no = ? 
-            WHERE id = ?");
-        $stmt->bind_param("ssssi", $data['last_name'], $data['first_name'], $data['middle_initial'], $data['student_no'], $id);
+
+        $stmt = $db->prepare("UPDATE section_student SET last_name = ?, first_name = ?, middle_initial = ?, student_no = ?
+            WHERE id = ? AND faculty_id = ?");
+        $stmt->bind_param("ssssii", $data['last_name'], $data['first_name'], $data['middle_initial'], $data['student_no'], $id, $faculty_id);
         if (!$stmt->execute()) {
             echo ResponseAPI::error("Failed to update student: " . $stmt->error);
             exit;
