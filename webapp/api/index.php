@@ -1116,8 +1116,10 @@ try {
         $ay = $db->real_escape_string($data['academic_year']);
         
         // Find matching classes for this section
+        // Only use classes owned by the current faculty. A student number may
+        // legitimately exist in different faculty users' class rosters.
         $classes = $db->query("SELECT id FROM class_section 
-            WHERE course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'")->fetch_all(MYSQLI_ASSOC);
+            WHERE faculty_id = $faculty_id AND course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'")->fetch_all(MYSQLI_ASSOC);
         
         // If no matching class exists, create a default one
         if (empty($classes)) {
