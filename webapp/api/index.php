@@ -1109,6 +1109,14 @@ try {
     }
     elseif ($action === 'add_section_student') {
         $data = json_decode(file_get_contents("php://input"), true);
+
+        $required = ['course_program', 'year_level', 'section', 'academic_year', 'student_no', 'last_name', 'first_name'];
+        foreach ($required as $field) {
+            if (!isset($data[$field]) || trim((string)$data[$field]) === '') {
+                echo ResponseAPI::error("Missing required field: $field");
+                exit;
+            }
+        }
         
         $program = $db->real_escape_string($data['course_program']);
         $year = intval($data['year_level']);
@@ -1166,12 +1174,14 @@ try {
         }
         
         $enrolledCount = 0;
+        $skippedCount = 0;
         foreach ($classes as $class) {
             // Check if student already exists in this class
             $check = $db->prepare("SELECT id FROM student WHERE class_section_id = ? AND student_no = ?");
             $check->bind_param("is", $class['id'], $data['student_no']);
             $check->execute();
             if ($check->get_result()->fetch_assoc()) {
+                $skippedCount++;
                 continue;
             }
             
@@ -1187,11 +1197,16 @@ try {
             }
         }
         
-        if ($enrolledCount > 0) {
-            echo ResponseAPI::success(['enrolled_in_classes' => $enrolledCount], "Student enrolled in $enrolledCount class(es)", 201);
-        } else {
-            echo ResponseAPI::error("Student already enrolled in all matching classes");
+        $message = $enrolledCount > 0
+            ? "Student enrolled in $enrolledCount class(es)"
+            : "Student already enrolled; no duplicate was created";
+        if ($skippedCount > 0) {
+            $message .= " ($skippedCount existing class enrollment(s) skipped)";
         }
+        echo ResponseAPI::success([
+            'enrolled_in_classes' => $enrolledCount,
+            'skipped_existing' => $skippedCount
+        ], $message, $enrolledCount > 0 ? 201 : 200);
     }
     elseif ($action === 'remove_section_student') {
         $data = json_decode(file_get_contents("php://input"), true);

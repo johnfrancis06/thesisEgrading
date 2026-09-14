@@ -286,7 +286,7 @@ $faculty_id = $auth->getFacultyId();
                             });
                             const data = await resp.json();
                             if (data.success) {
-                                count++;
+                                if (data.data && data.data.enrolled_in_classes > 0) count++;
                             } else {
                                 errors.push('Row ' + (i + 1) + ': ' + (data.message || 'Failed'));
                             }
