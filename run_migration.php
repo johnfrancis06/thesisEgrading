@@ -2,8 +2,8 @@
 require_once 'C:/xampp/htdocs/thesisEgrading/webapp/config/db.php';
 $db = Database::getInstance()->getConnection();
 
-// Run migration
-$sql = file_get_contents('C:/xampp/htdocs/thesisEgrading/webapp/sql/dynamic_grading_migration.sql');
+// Initialize the database from the single canonical schema.
+$sql = file_get_contents('C:/xampp/htdocs/thesisEgrading/webapp/sql/schema.sql');
 $statements = array_filter(array_map('trim', explode(';', $sql)));
 foreach ($statements as $stmt) {
     if ($stmt) {

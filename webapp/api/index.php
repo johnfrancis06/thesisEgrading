@@ -14,6 +14,15 @@ $action = $_GET['action'] ?? '';
 $db = Database::getInstance()->getConnection();
 $faculty_id = $auth->getFacultyId();
 
+function bindDynamicParams($stmt, $types, $params) {
+    $bindArgs = [$types];
+    foreach ($params as $index => $value) {
+        $params[$index] = $value;
+        $bindArgs[] = &$params[$index];
+    }
+    call_user_func_array([$stmt, 'bind_param'], $bindArgs);
+}
+
 function getGradingTemplateClassId($db, $faculty_id) {
     $result = $db->query("SELECT cs.id FROM class_section cs 
         JOIN subject s ON cs.subject_id = s.id 
@@ -503,7 +512,7 @@ try {
             
             $query .= " ORDER BY cs.academic_year DESC, cs.year_level, cs.section, s.last_name";
             $stmt = $db->prepare($query);
-            $stmt->bind_param($types, ...$params);
+            bindDynamicParams($stmt, $types, $params);
         }
         $stmt->execute();
         echo ResponseAPI::success($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
@@ -1022,7 +1031,7 @@ try {
               FROM section_student ss
               WHERE ss.faculty_id = ?
               GROUP BY ss.course_program, ss.year_level, ss.section, ss.academic_year
-                  ORDER BY cs.academic_year DESC";
+                  ORDER BY ss.academic_year DESC";
         
         $stmt = $db->prepare($query);
         $stmt->bind_param("i", $faculty_id);
@@ -1047,7 +1056,7 @@ try {
             FROM section_student ss
             WHERE ss.faculty_id = $faculty_id
             GROUP BY ss.course_program, ss.year_level, ss.section, ss.academic_year
-            ORDER BY cs.year_level ASC, cs.section ASC")->fetch_all(MYSQLI_ASSOC);
+            ORDER BY ss.year_level ASC, ss.section ASC")->fetch_all(MYSQLI_ASSOC);
         echo ResponseAPI::success($sections);
     }
     elseif ($action === 'get_compatible_classes') {
@@ -1074,7 +1083,7 @@ try {
         $query .= " ORDER BY cs.academic_year DESC, cs.semester DESC";
         
         $stmt = $db->prepare($query);
-        $stmt->bind_param($types, ...array_merge([$faculty_id], $params));
+        bindDynamicParams($stmt, $types, array_merge([$faculty_id], $params));
         $stmt->execute();
         echo ResponseAPI::success($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
     }
@@ -1100,7 +1109,7 @@ try {
         $query .= " ORDER BY ss.last_name";
         
         $stmt = $db->prepare($query);
-        $stmt->bind_param($types, ...$params);
+        bindDynamicParams($stmt, $types, $params);
         $stmt->execute();
         echo ResponseAPI::success($stmt->get_result()->fetch_all(MYSQLI_ASSOC));
     }
@@ -1387,9 +1396,9 @@ try {
         $sessions = $db->query("SELECT * FROM attendance_session WHERE class_section_id = $classId ORDER BY date ASC")->fetch_all(MYSQLI_ASSOC);
         
         if ($format === 'xlsx' || $format === 'excel') {
-            generateAttendanceExcel($class, $students, $sessions);
+            generateAttendanceExcel($db, $class, $students, $sessions);
         } else {
-            generateAttendanceCSV($class, $students, $sessions);
+            generateAttendanceCSV($db, $class, $students, $sessions);
         }
     }
     // GE-104 Grading System Endpoints
@@ -1825,7 +1834,7 @@ function generatePdfEGrading($class, $students) {
     echo '</body></html>';
 }
 
-function generateAttendanceCSV($class, $students, $sessions) {
+function generateAttendanceCSV($db, $class, $students, $sessions) {
     header('Content-Type: text/csv');
     header('Content-Disposition: attachment; filename="Attendance_' . $class['code'] . '.csv"');
     
@@ -1880,8 +1889,8 @@ function generateAttendanceCSV($class, $students, $sessions) {
     }
 }
 
-function generateAttendanceExcel($class, $students, $sessions) {
-    generateAttendanceCSV($class, $students, $sessions);
+function generateAttendanceExcel($db, $class, $students, $sessions) {
+    generateAttendanceCSV($db, $class, $students, $sessions);
 }
 
 // ==========================================

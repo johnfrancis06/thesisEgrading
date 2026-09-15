@@ -152,3 +152,103 @@ CREATE TABLE IF NOT EXISTS audit_log (
     FOREIGN KEY (faculty_id) REFERENCES faculty(id),
     INDEX idx_created (created_at)
 );
+
+CREATE TABLE IF NOT EXISTS grade_category_template (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) NOT NULL UNIQUE,
+    description TEXT,
+    default_weight DECIMAL(5,2) DEFAULT 0,
+    default_max_score DECIMAL(10,2) DEFAULT 100,
+    sort_order INT DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS grade_category_config (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    class_section_id INT NOT NULL,
+    period ENUM('midterm', 'final') NOT NULL,
+    template_id INT,
+    custom_name VARCHAR(100),
+    weight_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+    perfect_score DECIMAL(10,2) NOT NULL DEFAULT 0,
+    item_count INT DEFAULT 1,
+    sort_order INT DEFAULT 0,
+    is_visible BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (class_section_id) REFERENCES class_section(id) ON DELETE CASCADE,
+    FOREIGN KEY (template_id) REFERENCES grade_category_template(id),
+    UNIQUE KEY unique_class_period_config (class_section_id, period, template_id),
+    INDEX idx_class_period_config (class_section_id, period)
+);
+
+CREATE TABLE IF NOT EXISTS grade_item_config (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    category_config_id INT NOT NULL,
+    label VARCHAR(50) NOT NULL,
+    max_score DECIMAL(10,2) NOT NULL DEFAULT 0,
+    sort_order INT DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (category_config_id) REFERENCES grade_category_config(id) ON DELETE CASCADE,
+    INDEX idx_category_config (category_config_id)
+);
+
+ALTER TABLE grade_category
+    ADD COLUMN IF NOT EXISTS config_id INT,
+    ADD COLUMN IF NOT EXISTS period ENUM('midterm', 'final') DEFAULT 'midterm',
+    ADD CONSTRAINT fk_grade_category_config FOREIGN KEY (config_id) REFERENCES grade_category_config(id);
+
+ALTER TABLE grade_item
+    ADD COLUMN IF NOT EXISTS item_config_id INT,
+    ADD CONSTRAINT fk_grade_item_config FOREIGN KEY (item_config_id) REFERENCES grade_item_config(id);
+
+CREATE INDEX idx_grade_category_config_id ON grade_category(config_id);
+CREATE INDEX idx_grade_item_config_id ON grade_item(item_config_id);
+
+CREATE TABLE IF NOT EXISTS grade_scale (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    min_score DECIMAL(5,2) NOT NULL UNIQUE,
+    grade_point DECIMAL(3,2) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS grade_component_perfect_score (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    class_section_id INT NOT NULL,
+    period ENUM('midterm', 'final') NOT NULL,
+    component_type ENUM('class_participation', 'problem_set', 'quizzes', 'periodical_exam') NOT NULL,
+    perfect_score DECIMAL(10,2) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (class_section_id) REFERENCES class_section(id),
+    UNIQUE KEY unique_class_period_component (class_section_id, period, component_type),
+    INDEX idx_component_class_period (class_section_id, period)
+);
+
+INSERT INTO grade_category_template
+    (name, description, default_weight, default_max_score, sort_order)
+VALUES
+    ('Class Participation', 'Class participation activities', 20, 100, 1),
+    ('Problem Set', 'Problem sets and assignments', 20, 50, 2),
+    ('Quizzes', 'Short quizzes and assessments', 30, 100, 3),
+    ('Periodical Exam', 'Major periodical examination', 30, 100, 4)
+ON DUPLICATE KEY UPDATE
+    description = VALUES(description),
+    default_weight = VALUES(default_weight),
+    default_max_score = VALUES(default_max_score),
+    sort_order = VALUES(sort_order);
+
+INSERT INTO grade_scale (min_score, grade_point) VALUES
+    (0, 5.00),
+    (75, 3.00),
+    (78, 2.75),
+    (81, 2.50),
+    (84, 2.25),
+    (87, 2.00),
+    (90, 1.75),
+    (93, 1.50),
+    (96, 1.25),
+    (99, 1.00)
+ON DUPLICATE KEY UPDATE grade_point = VALUES(grade_point);
