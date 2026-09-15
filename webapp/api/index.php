@@ -1565,6 +1565,9 @@ try {
             $itemsStmt->bind_param("i", $config['id']);
             $itemsStmt->execute();
             $config['items'] = $itemsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+            $config['perfect_score'] = array_sum(array_map(function ($item) {
+                return floatval($item['max_score']);
+            }, $config['items']));
         }
         
         echo ResponseAPI::success($configs);
@@ -1609,10 +1612,12 @@ try {
             }
             $customName = trim($config['custom_name'] ?? '');
             $weight = floatval($config['weight_percent'] ?? 0);
-            $perfectScore = floatval($config['perfect_score'] ?? 0);
             $itemCount = intval($config['item_count'] ?? 1);
             $isVisible = isset($config['is_visible']) ? (bool)$config['is_visible'] : true;
             $items = $config['items'] ?? [];
+            $perfectScore = array_sum(array_map(function ($item) {
+                return floatval($item['max_score'] ?? 0);
+            }, $items));
             
             $stmt = $db->prepare("
                 INSERT INTO grade_category_config (class_section_id, period, template_id, custom_name, weight_percent, perfect_score, item_count, sort_order, is_visible)

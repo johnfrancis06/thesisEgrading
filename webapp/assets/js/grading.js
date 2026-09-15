@@ -120,7 +120,7 @@ async function renderGradingTable(data, classId, period) {
     const perfectScores = {};
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-        perfectScores[key] = config.perfect_score;
+        perfectScores[key] = getCategoryPerfectScore(config);
     });
     
     // Store perfect scores globally
@@ -177,6 +177,12 @@ function getComponentKeyFromTemplate(templateId) {
         4: 'periodical_exam'
     };
     return templateMap[templateId] || `custom_${templateId}`;
+}
+
+function getCategoryPerfectScore(config) {
+    return (config.items || []).reduce((total, item) => {
+        return total + (parseFloat(item.max_score) || 0);
+    }, 0);
 }
 
 function updatePerfectScoreDisplay(perfectScores) {
@@ -250,7 +256,7 @@ function buildPerfectScoreRow(configs) {
     
     configs.forEach(config => {
         const items = config.items || [];
-        const perfectScore = config.perfect_score;
+        const perfectScore = getCategoryPerfectScore(config);
         const weight = config.weight_percent;
         
         items.forEach(item => {
@@ -282,7 +288,7 @@ function buildStudentRow(student, configs, period) {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
         const compData = componentsData[key] || {};
         const items = config.items || [];
-        const perfectScore = config.perfect_score;
+        const perfectScore = getCategoryPerfectScore(config);
         const weight = parseFloat(config.weight_percent) || 0;
         
         // Render item inputs
@@ -316,7 +322,7 @@ function buildStudentRow(student, configs, period) {
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
         const compData = componentsData[key] || {};
-        const perfectScore = config.perfect_score;
+        const perfectScore = getCategoryPerfectScore(config);
         const weight = config.weight_percent;
         const rawTotal = compData.raw_total || 0;
         const equivScore = perfectScore > 0 ? transmute(rawTotal, perfectScore) : 0;
@@ -499,7 +505,7 @@ function calculateRowGrades(studentId) {
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
         const configuredWeight = parseFloat(config.weight_percent) || 0;
-        const perfectScore = perfectScores[key] || config.perfect_score || 100;
+        const perfectScore = perfectScores[key] || getCategoryPerfectScore(config) || 100;
         
         let total = 0;
         

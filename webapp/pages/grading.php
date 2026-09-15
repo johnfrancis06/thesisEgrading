@@ -433,7 +433,6 @@ if ($classId > 0) {
             
             const defaultName = template ? template.name : 'New Category';
             const defaultWeight = template ? template.default_weight : 0;
-            const defaultMaxScore = template ? template.default_max_score : 100;
             const defaultItemCount = template && template.name === 'Class Participation' ? (period === 'final' ? 4 : 2) : 1;
             
             const cardHtml = `
@@ -454,10 +453,6 @@ if ($classId > 0) {
                                 <div class="col-md-4">
                                     <label class="form-label">Weight %</label>
                                     <input type="number" class="form-control cat-weight" value="${defaultWeight}" step="0.01" min="0" max="100">
-                                </div>
-                                <div class="col-md-4">
-                                    <label class="form-label">Perfect Score</label>
-                                    <input type="number" class="form-control cat-perfect" value="${defaultMaxScore}" step="1" min="1">
                                 </div>
                                 <div class="col-md-4">
                                     <label class="form-label"># Items</label>
@@ -606,10 +601,6 @@ if ($classId > 0) {
                                         <input type="number" class="form-control cat-weight" value="${config.weight_percent}" step="0.01" min="0" max="100">
                                     </div>
                                     <div class="col-md-4">
-                                        <label class="form-label">Perfect Score</label>
-                                        <input type="number" class="form-control cat-perfect" value="${config.perfect_score}" step="1" min="1">
-                                    </div>
-                                    <div class="col-md-4">
                                         <label class="form-label"># Items</label>
                                         <input type="number" class="form-control cat-item-count" value="${config.items ? config.items.length : 1}" min="1" max="10" onchange="updateItems('${categoryId}', this.value)">
                                     </div>
@@ -647,12 +638,14 @@ if ($classId > 0) {
                     }
                 });
                 
+                const perfectScore = items.reduce((total, item) => total + item.max_score, 0);
+
                 configs.push({
                     id: dbId ? parseInt(dbId) : null, // Include existing ID for update
                     template_id: templateId ? parseInt(templateId) : null,
                     custom_name: card.querySelector('.cat-name').value,
                     weight_percent: parseFloat(card.querySelector('.cat-weight').value) || 0,
-                    perfect_score: parseFloat(card.querySelector('.cat-perfect').value) || 0,
+                    perfect_score: perfectScore,
                     item_count: items.length,
                     sort_order: idx,
                     is_visible: true,
