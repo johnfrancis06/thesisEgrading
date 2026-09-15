@@ -1756,7 +1756,7 @@ function syncGradeTables($db, $classId, $period) {
             $types = str_repeat('i', count($existingItemConfigIds));
             $params = array_merge([$categoryId], $existingItemConfigIds);
             $stmt = $db->prepare("DELETE FROM grade_item WHERE grade_category_id = ? AND item_config_id NOT IN ($placeholders)");
-            $stmt->bind_param("i$types", ...$params);
+            bindDynamicParams($stmt, "i$types", $params);
             $stmt->execute();
         } else {
             $db->query("DELETE FROM grade_item WHERE grade_category_id = $categoryId");
@@ -1770,7 +1770,7 @@ function syncGradeTables($db, $classId, $period) {
         $types = str_repeat('i', count($existingConfigIds));
         $params = array_merge([$classId, $period], $existingConfigIds);
         $stmt = $db->prepare("DELETE FROM grade_category WHERE class_section_id = ? AND period = ? AND config_id NOT IN ($placeholders)");
-        $stmt->bind_param("is$types", ...$params);
+        bindDynamicParams($stmt, "is$types", $params);
         $stmt->execute();
     } else {
         $stmt = $db->prepare("DELETE FROM grade_category WHERE class_section_id = ? AND period = ?");

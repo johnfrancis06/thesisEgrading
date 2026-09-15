@@ -252,11 +252,9 @@ function buildPerfectScoreRow(configs) {
         const items = config.items || [];
         const perfectScore = config.perfect_score;
         const weight = config.weight_percent;
-        const itemCount = items.length;
-        const maxPerItem = itemCount > 0 ? Math.round(perfectScore / itemCount) : 0;
         
-        items.forEach(() => {
-            html += `<td class="cell-raw perfect-cell">${maxPerItem}</td>`;
+        items.forEach(item => {
+            html += `<td class="cell-raw perfect-cell">${parseFloat(item.max_score) || 0}</td>`;
         });
         
         html += `<td class="cell-total perfect-cell">${perfectScore || ''}</td>`;
@@ -291,7 +289,7 @@ function buildStudentRow(student, configs, period) {
         items.forEach((item, idx) => {
             const itemData = (Array.isArray(compData.items) ? compData.items[idx] : null) || { raw_score: '', max_score: 0, item_id: null };
             const score = itemData.raw_score !== undefined && itemData.raw_score !== null ? itemData.raw_score : '';
-            const maxScore = parseFloat(itemData.max_score || item.max_score) || 100;
+            const maxScore = parseFloat(item.max_score) || parseFloat(itemData.max_score) || 100;
             
             html += `<td class="cell-raw">
                 <input type="number" class="grade-input" 
