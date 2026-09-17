@@ -519,12 +519,27 @@ function calculateRowGrades(studentId) {
         
         // Read weight from input (editable by teacher)
         const weightInput = document.querySelector(`input.weight-input[data-student="${studentId}"][data-component="${key}"]`);
-        const weightPercent = weightInput ? parseFloat(weightInput.value) : configuredWeight;
-        const weight = (Number.isFinite(weightPercent) ? weightPercent : configuredWeight) / 100;
+        const isManuallyEdited = weightInput && weightInput.dataset.manuallyEdited === 'true';
+        const manualWeightPercent = weightInput ? parseFloat(weightInput.value) : configuredWeight;
+        
+        // Use configured weight for calculation unless manually edited
+        const weightForCalc = isManuallyEdited ? (Number.isFinite(manualWeightPercent) ? manualWeightPercent : configuredWeight) : configuredWeight;
+        const weight = weightForCalc / 100;
         
         const weighted = equivScore * weight;
         
-        allWeightedScores[key] = { total, equiv: equivScore, weighted, weight: weight * 100 };
+        // Effective weight = earned percentage * configured weight / 100
+        // e.g., 90% score * 20% weight = 18% effective weight (for display)
+        const effectiveWeight = equivScore > 0 ? (equivScore * configuredWeight) / 100 : 0;
+        
+        allWeightedScores[key] = { 
+            total, 
+            equiv: equivScore, 
+            weighted, 
+            weight: effectiveWeight, 
+            configuredWeight,
+            isManuallyEdited
+        };
     });
     
     // Calculate period grade (sum of weighted scores)
@@ -568,9 +583,15 @@ function updateComputedCells(studentId, allWeightedScores, periodGrade, configs)
             // Weight input - update if not manually edited
             if (weightInputs[idx]) {
                 const input = weightInputs[idx];
-                if (!input.dataset.manuallyEdited) {
-                    input.value = data.weight > 0 ? data.weight.toFixed(2) : '';
+                const dataWeight = data.weight; // effective weight
+                const isManuallyEdited = data.isManuallyEdited;
+                
+                if (!isManuallyEdited) {
+                    // Display effective weight (earned weight) instead of configured weight
+                    // e.g., 90% score * 20% weight = 18% effective weight
+                    input.value = dataWeight > 0 ? dataWeight.toFixed(2) : '';
                 }
+                // If manually edited, keep the manual value
             }
         });
     } else {
@@ -584,8 +605,12 @@ function updateComputedCells(studentId, allWeightedScores, periodGrade, configs)
             if (equivCells[idx]) equivCells[idx].textContent = data.total > 0 ? data.equiv.toFixed(2) : '';
             if (weightInputs[idx]) {
                 const input = weightInputs[idx];
-                if (!input.dataset.manuallyEdited) {
-                    input.value = data.weight > 0 ? data.weight.toFixed(2) : '';
+                const dataWeight = data.weight;
+                const isManuallyEdited = data.isManuallyEdited;
+                
+                if (!isManuallyEdited) {
+                    // Display effective weight (earned weight)
+                    input.value = dataWeight > 0 ? dataWeight.toFixed(2) : '';
                 }
             }
         });

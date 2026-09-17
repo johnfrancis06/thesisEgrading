@@ -13,7 +13,7 @@ $action = $_GET['action'] ?? '';
 $db = Database::getInstance()->getConnection();
 $faculty_id = $auth->getFacultyId();
 
-$validPages = ['dashboard', 'classes', 'subjects', 'section-enrollment', 'grading', 'attendance', 'reports', 'students', 'login', 'logout', 'register'];
+$validPages = ['dashboard', 'classes', 'subjects', 'section-enrollment', 'grading', 'attendance', 'reports', 'students', 'login', 'logout', 'register', 'landing'];
 
 if ($page && in_array($page, $validPages)) {
     if ($page === 'login') {
@@ -33,6 +33,10 @@ if ($page && in_array($page, $validPages)) {
         header("Location: index.php?page=login");
         exit;
     }
+    if ($page === 'landing') {
+        include 'pages/landing.php';
+        exit;
+    }
     $auth->requireLogin();
     $pageFile = "pages/{$page}.php";
     if (file_exists($pageFile)) {
@@ -45,7 +49,7 @@ if (!$action) {
     if ($auth->isLoggedIn()) {
         header("Location: index.php?page=dashboard");
     } else {
-        header("Location: index.php?page=login");
+        header("Location: index.php?page=landing");
     }
     exit;
 }
