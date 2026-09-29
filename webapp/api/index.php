@@ -56,6 +56,58 @@ function cloneGradingSheets($db, $newClassId, $templateClassId) {
     return true;
 }
 
+function createDefaultGradingSheets($db, $classId, $faculty_id) {
+    $templateId = getGradingTemplateClassId($db, $faculty_id);
+    if ($templateId) {
+        cloneGradingSheets($db, $classId, $templateId);
+        return true;
+    }
+
+    $categories = [
+        ['midterm', 'Class Standing', 20],
+        ['midterm', 'Problem Set', 20],
+        ['midterm', 'Quizzes', 30],
+        ['midterm', 'Exam', 30],
+        ['final', 'Class Standing', 20],
+        ['final', 'Problem Set', 20],
+        ['final', 'Quizzes', 30],
+        ['final', 'Exam', 30]
+    ];
+    foreach ($categories as $cat) {
+        $stmt2 = $db->prepare("INSERT INTO grade_category (class_section_id, period, name, weight_percent) VALUES (?, ?, ?, ?)");
+        $stmt2->bind_param("issi", $classId, $cat[0], $cat[1], $cat[2]);
+        $stmt2->execute();
+        $categoryId = $db->insert_id;
+
+        if ($cat[1] === 'Quizzes') {
+            for ($i = 1; $i <= 5; $i++) {
+                $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
+                $label = "Quiz " . $i;
+                $maxScore = 10;
+                $sortOrder = $i - 1;
+                $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
+                $stmt3->execute();
+            }
+        } elseif ($cat[1] === 'Problem Set') {
+            for ($i = 1; $i <= 3; $i++) {
+                $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
+                $label = "Problem Set " . $i;
+                $maxScore = 20;
+                $sortOrder = $i - 1;
+                $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
+                $stmt3->execute();
+            }
+        } else {
+            $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
+            $maxScore = 100;
+            $sortOrder = 0;
+            $stmt3->bind_param("isii", $categoryId, $cat[1], $maxScore, $sortOrder);
+            $stmt3->execute();
+        }
+    }
+    return true;
+}
+
 function getAttendanceLateCountsPresent($db, $classId) {
     $columnCheck = $db->query("SHOW COLUMNS FROM class_section LIKE 'attendance_late_counts_present'");
     if ($columnCheck && $columnCheck->num_rows > 0) {
@@ -338,148 +390,124 @@ try {
             }
             
             echo ResponseAPI::success(['results' => $results, 'total_added' => $totalAdded, 'total_skipped' => $totalSkipped], $message);
-        } catch (Exception $e) {
+        } catch (\Exception | \Error $e) {
             $db->rollback();
             echo ResponseAPI::error("Enrollment failed: " . $e->getMessage());
         }
     }
     elseif ($action === 'create_class') {
-        $data = json_decode(file_get_contents("php://input"), true);
-        $stmt = $db->prepare("INSERT INTO class_section 
-            (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("iisisis", $data['subject_id'], $faculty_id, $data['course_program'], 
-            $data['year_level'], $data['section'], $data['semester'], $data['academic_year']);
-        
-        if ($stmt->execute()) {
-            $classId = $db->insert_id;
-            $templateId = getGradingTemplateClassId($db, $faculty_id);
-            if ($templateId) {
-                cloneGradingSheets($db, $classId, $templateId);
-            } else {
-                $categories = [
-                    ['midterm', 'Class Standing', 20],
-                    ['midterm', 'Problem Set', 20],
-                    ['midterm', 'Quizzes', 30],
-                    ['midterm', 'Exam', 30],
-                    ['final', 'Class Standing', 20],
-                    ['final', 'Problem Set', 20],
-                    ['final', 'Quizzes', 30],
-                    ['final', 'Exam', 30]
-                ];
-                foreach ($categories as $cat) {
-                    $stmt2 = $db->prepare("INSERT INTO grade_category (class_section_id, period, name, weight_percent) VALUES (?, ?, ?, ?)");
-                    $stmt2->bind_param("issi", $classId, $cat[0], $cat[1], $cat[2]);
-                    $stmt2->execute();
-                    $categoryId = $db->insert_id;
-                    
-                    if ($cat[1] === 'Quizzes') {
-                        for ($i = 1; $i <= 5; $i++) {
-                            $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                            $label = "Quiz " . $i;
-                            $maxScore = 10;
-                            $sortOrder = $i - 1;
-                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
-                            $stmt3->execute();
-                        }
-                    } elseif ($cat[1] === 'Problem Set') {
-                        for ($i = 1; $i <= 3; $i++) {
-                            $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                            $label = "Problem Set " . $i;
-                            $maxScore = 20;
-                            $sortOrder = $i - 1;
-                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
-                            $stmt3->execute();
-                        }
-                    } else {
-                        $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                        $maxScore = 100;
-                        $sortOrder = 0;
-                        $stmt3->bind_param("isii", $categoryId, $cat[1], $maxScore, $sortOrder);
-                        $stmt3->execute();
+        try {
+            $data = json_decode(file_get_contents("php://input"), true);
+            if (!$data) {
+                echo ResponseAPI::error("Invalid or missing request body");
+                exit;
+            }
+            $db->begin_transaction();
+            $stmt = $db->prepare("INSERT INTO class_section 
+                (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("iisisis", $data['subject_id'], $faculty_id, $data['course_program'], 
+                $data['year_level'], $data['section'], $data['semester'], $data['academic_year']);
+            
+            if ($stmt->execute()) {
+                $classId = $db->insert_id;
+                createDefaultGradingSheets($db, $classId, $faculty_id);
+
+                $inlineStudents = $data['students'] ?? [];
+                if (!is_array($inlineStudents)) {
+                    $inlineStudents = json_decode($inlineStudents, true) ?? [];
+                }
+                $added = 0;
+                if (!empty($inlineStudents)) {
+                    foreach ($inlineStudents as $s) {
+                        $lname = $db->real_escape_string($s['last_name'] ?? '');
+                        $fname = $db->real_escape_string($s['first_name'] ?? '');
+                        $mi = $db->real_escape_string($s['middle_initial'] ?? '');
+                        $sno = $db->real_escape_string($s['student_no'] ?? '');
+                        if (!$sno || !$lname || !$fname) continue;
+                        $db->query("INSERT IGNORE INTO student (class_section_id, last_name, first_name, middle_initial, student_no)
+                            VALUES ($classId, '$lname', '$fname', '$mi', '$sno')");
+                        $added++;
                     }
                 }
+                $db->commit();
+                $message = "Class created" . ($added > 0 ? " with $added student(s)" : "");
+                ob_clean();
+                echo ResponseAPI::success(['id' => $classId, 'added' => $added], $message, 201);
+            } else {
+                $db->rollback();
+                echo ResponseAPI::error("Failed to create class: " . $stmt->error);
             }
-            echo ResponseAPI::success(['id' => $classId], "Class created", 201);
-        } else {
-            echo ResponseAPI::error("Failed to create class: " . $stmt->error);
+        } catch (\Exception | \Error $e) {
+            if ($db->in_transaction) $db->rollback();
+            ob_clean();
+            echo ResponseAPI::error("Failed to create class: " . $e->getMessage(), 500);
         }
     }
     elseif ($action === 'create_class_with_students') {
-        $data = json_decode(file_get_contents("php://input"), true);
-        
-        $stmt = $db->prepare("INSERT INTO class_section 
-            (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("iisisis", $data['subject_id'], $faculty_id, $data['course_program'], 
-            $data['year_level'], $data['section'], $data['semester'], $data['academic_year']);
-        
-        if ($stmt->execute()) {
-            $classId = $db->insert_id;
-            $templateId = getGradingTemplateClassId($db, $faculty_id);
-            if ($templateId) {
-                cloneGradingSheets($db, $classId, $templateId);
-            } else {
-                $categories = [
-                    ['midterm', 'Class Standing', 20],
-                    ['midterm', 'Problem Set', 20],
-                    ['midterm', 'Quizzes', 30],
-                    ['midterm', 'Exam', 30],
-                    ['final', 'Class Standing', 20],
-                    ['final', 'Problem Set', 20],
-                    ['final', 'Quizzes', 30],
-                    ['final', 'Exam', 30]
-                ];
-                foreach ($categories as $cat) {
-                    $stmt2 = $db->prepare("INSERT INTO grade_category (class_section_id, period, name, weight_percent) VALUES (?, ?, ?, ?)");
-                    $stmt2->bind_param("issi", $classId, $cat[0], $cat[1], $cat[2]);
-                    $stmt2->execute();
-                    $categoryId = $db->insert_id;
-                    
-                    if ($cat[1] === 'Quizzes') {
-                        for ($i = 1; $i <= 5; $i++) {
-                            $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                            $label = "Quiz " . $i;
-                            $maxScore = 10;
-                            $sortOrder = $i - 1;
-                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
-                            $stmt3->execute();
-                        }
-                    } elseif ($cat[1] === 'Problem Set') {
-                        for ($i = 1; $i <= 3; $i++) {
-                            $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                            $label = "Problem Set " . $i;
-                            $maxScore = 20;
-                            $sortOrder = $i - 1;
-                            $stmt3->bind_param("isii", $categoryId, $label, $maxScore, $sortOrder);
-                            $stmt3->execute();
-                        }
-                    } else {
-                        $stmt3 = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
-                        $maxScore = 100;
-                        $sortOrder = 0;
-                        $stmt3->bind_param("isii", $categoryId, $cat[1], $maxScore, $sortOrder);
-                        $stmt3->execute();
+        try {
+            $data = json_decode(file_get_contents("php://input"), true);
+
+            if (!$data) {
+                echo ResponseAPI::error("Invalid or missing request body");
+                exit;
+            }
+
+            $db->begin_transaction();
+
+            $stmt = $db->prepare("INSERT INTO class_section
+                (subject_id, faculty_id, course_program, year_level, section, semester, academic_year)
+                VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("iisisis", $data['subject_id'], $faculty_id, $data['course_program'],
+                $data['year_level'], $data['section'], $data['semester'], $data['academic_year']);
+
+            if ($stmt->execute()) {
+                $classId = $db->insert_id;
+                createDefaultGradingSheets($db, $classId, $faculty_id);
+
+                $program = $db->real_escape_string($data['course_program']);
+                $year = intval($data['year_level']);
+                $section = $db->real_escape_string($data['section']);
+                $ay = $db->real_escape_string($data['academic_year']);
+
+                $rosterStudents = $db->query("SELECT * FROM section_student
+                    WHERE faculty_id = $faculty_id AND course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'")->fetch_all(MYSQLI_ASSOC);
+
+                foreach ($rosterStudents as $s) {
+                    $db->query("INSERT IGNORE INTO student (class_section_id, last_name, first_name, middle_initial, student_no)
+                        VALUES ($classId, '{$s['last_name']}', '{$s['first_name']}', '{$s['middle_initial']}', '{$s['student_no']}')");
+                }
+
+                $inlineStudents = $data['students'] ?? [];
+                if (!is_array($inlineStudents)) {
+                    $inlineStudents = json_decode($inlineStudents, true) ?? [];
+                }
+                $addedInline = 0;
+                if (!empty($inlineStudents)) {
+                    foreach ($inlineStudents as $s) {
+                        $lname = $db->real_escape_string($s['last_name'] ?? '');
+                        $fname = $db->real_escape_string($s['first_name'] ?? '');
+                        $mi = $db->real_escape_string($s['middle_initial'] ?? '');
+                        $sno = $db->real_escape_string($s['student_no'] ?? '');
+                        if (!$sno || !$lname || !$fname) continue;
+                        $db->query("INSERT IGNORE INTO student (class_section_id, last_name, first_name, middle_initial, student_no)
+                            VALUES ($classId, '$lname', '$fname', '$mi', '$sno')");
+                        $addedInline++;
                     }
                 }
+
+                $db->commit();
+                $totalStudents = count($rosterStudents) + $addedInline;
+                ob_clean();
+                echo ResponseAPI::success(['id' => $classId, 'roster_students' => count($rosterStudents), 'inline_students' => $addedInline], "Class created with $totalStudents students", 201);
+            } else {
+                $db->rollback();
+                echo ResponseAPI::error("Failed to create class: " . $stmt->error);
             }
-            
-            $program = $db->real_escape_string($data['course_program']);
-            $year = intval($data['year_level']);
-            $section = $db->real_escape_string($data['section']);
-            $ay = $db->real_escape_string($data['academic_year']);
-            
-            $students = $db->query("SELECT * FROM section_student 
-                WHERE course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'")->fetch_all(MYSQLI_ASSOC);
-            
-            foreach ($students as $s) {
-                $db->query("INSERT INTO student (class_section_id, last_name, first_name, middle_initial, student_no) 
-                    VALUES ($classId, '{$s['last_name']}', '{$s['first_name']}', '{$s['middle_initial']}', '{$s['student_no']}')");
-            }
-            
-            echo ResponseAPI::success(['id' => $classId], "Class created with " . count($students) . " students", 201);
-        } else {
-            echo ResponseAPI::error("Failed to create class: " . $stmt->error);
+        } catch (\Exception | \Error $e) {
+            if ($db->in_transaction) $db->rollback();
+            ob_clean();
+            echo ResponseAPI::error("Failed to create class: " . $e->getMessage(), 500);
         }
     }
     elseif ($action === 'get_students') {
@@ -642,18 +670,48 @@ try {
     }
     elseif ($action === 'add_grade_item') {
         $data = json_decode(file_get_contents("php://input"), true);
-        $stmt = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
+        
+        // Get category config_id from grade_category
+        $catResult = $db->query("SELECT config_id FROM grade_category WHERE id = {$data['category_id']}")->fetch_assoc();
+        $configId = $catResult ? intval($catResult['config_id']) : null;
+        
         $sort = intval($data['sort_order'] ?? 0);
-        $stmt->bind_param("isdi", $data['category_id'], $data['label'], $data['max_score'], $sort);
-        echo $stmt->execute() ? ResponseAPI::success(['id' => $db->insert_id], "Item added") 
+        $configItemId = null;
+        
+        // First create entry in grade_item_config if category has config_id
+        if ($configId) {
+            $stmt2 = $db->prepare("INSERT INTO grade_item_config (category_config_id, label, max_score, sort_order, is_active) VALUES (?, ?, ?, ?, 1)");
+            $stmt2->bind_param("isdi", $configId, $data['label'], $data['max_score'], $sort);
+            if ($stmt2->execute()) {
+                $configItemId = $db->insert_id;
+            }
+        }
+        
+        // Then insert into grade_item with the config_item_id
+        $stmt = $db->prepare("INSERT INTO grade_item (grade_category_id, label, max_score, sort_order, item_config_id) VALUES (?, ?, ?, ?, ?)");
+        $stmt->bind_param("isdii", $data['category_id'], $data['label'], $data['max_score'], $sort, $configItemId);
+        $success = $stmt->execute();
+        $itemId = $db->insert_id;
+        
+        echo $success ? ResponseAPI::success(['id' => $itemId, 'config_item_id' => $configItemId], "Item added") 
             : ResponseAPI::error("Failed to add item");
     }
     elseif ($action === 'delete_grade_item') {
         $data = json_decode(file_get_contents("php://input"), true);
         $itemId = intval($data['id'] ?? 0);
         if ($itemId > 0) {
+            // Get item_config_id before deleting
+            $itemConfigResult = $db->query("SELECT item_config_id FROM grade_item WHERE id = $itemId")->fetch_assoc();
+            $configItemId = $itemConfigResult ? intval($itemConfigResult['item_config_id']) : null;
+            
             $db->query("DELETE FROM grade_score WHERE grade_item_id = $itemId");
             $db->query("DELETE FROM grade_item WHERE id = $itemId");
+            
+            // Also delete from grade_item_config
+            if ($configItemId) {
+                $db->query("DELETE FROM grade_item_config WHERE id = $configItemId");
+            }
+            
             echo ResponseAPI::success([], "Item deleted");
         } else {
             echo ResponseAPI::error("Invalid item ID");
@@ -674,13 +732,48 @@ try {
         $data = json_decode(file_get_contents("php://input"), true);
         $id = intval($data['id'] ?? 0);
         if ($id > 0) {
+            // Update grade_item
             $stmt = $db->prepare("UPDATE grade_item SET label = ?, max_score = ?, sort_order = ? WHERE id = ?");
             $stmt->bind_param("sdii", $data['label'], $data['max_score'], $data['sort_order'], $id);
-            echo $stmt->execute() ? ResponseAPI::success([], "Item updated") 
+            $success = $stmt->execute();
+            
+            // Also update grade_item_config if item_config_id exists (so changes persist through sync)
+            $itemConfigResult = $db->query("SELECT item_config_id FROM grade_item WHERE id = $id")->fetch_assoc();
+            if ($success && $itemConfigResult && $itemConfigResult['item_config_id']) {
+                $configId = intval($itemConfigResult['item_config_id']);
+                $stmt2 = $db->prepare("UPDATE grade_item_config SET label = ?, max_score = ?, sort_order = ? WHERE id = ?");
+                $stmt2->bind_param("sdii", $data['label'], $data['max_score'], $data['sort_order'], $configId);
+                $stmt2->execute();
+            }
+            
+            echo $success ? ResponseAPI::success([], "Item updated") 
                 : ResponseAPI::error("Failed to update item");
         } else {
             echo ResponseAPI::error("Invalid item ID");
         }
+    }
+    elseif ($action === 'bulk_update_max_score') {
+        $data = json_decode(file_get_contents("php://input"), true);
+        $classId = intval($data['class_id'] ?? 0);
+        $period = $data['period'] ?? '';
+        $component = $data['component'] ?? '';
+        $maxScore = floatval($data['max_score'] ?? 0);
+        
+        if (!$classId || !$period || !$component || $maxScore <= 0) {
+            echo ResponseAPI::error("Missing required parameters");
+            exit;
+        }
+        
+        $stmt = $db->prepare("
+            UPDATE grade_item gi
+            JOIN grade_category gc ON gi.grade_category_id = gc.id
+            SET gi.max_score = ?
+            WHERE gc.class_section_id = ? AND gc.period = ? AND gc.name = ?
+        ");
+        $stmt->bind_param("diss", $maxScore, $classId, $period, $component);
+        $stmt->execute();
+        
+        echo ResponseAPI::success(['affected_rows' => $stmt->affected_rows], "Max scores updated");
     }
     elseif ($action === 'create_subject') {
         $data = json_decode(file_get_contents("php://input"), true);
@@ -717,7 +810,7 @@ try {
             }
             ob_clean();
             echo ResponseAPI::success($result->fetch_all(MYSQLI_ASSOC));
-        } catch (Exception $e) {
+        } catch (\Exception | \Error $e) {
             ob_clean();
             echo ResponseAPI::error("Failed to load subjects: " . $e->getMessage(), 500);
         }
@@ -726,6 +819,17 @@ try {
         $data = json_decode(file_get_contents("php://input"), true);
         $subjectId = intval($data['id'] ?? 0);
         if ($subjectId > 0) {
+            // Check if subject is used in any class
+            $check = $db->prepare("SELECT COUNT(*) as count FROM class_section WHERE subject_id = ?");
+            $check->bind_param("i", $subjectId);
+            $check->execute();
+            $result = $check->get_result()->fetch_assoc();
+            
+            if ($result['count'] > 0) {
+                echo ResponseAPI::error("Cannot delete subject: it is used in {$result['count']} class(es). Please delete those classes first.");
+                exit;
+            }
+            
             $db->query("DELETE FROM subject WHERE id = $subjectId");
             echo ResponseAPI::success([], "Subject deleted");
         } else {
@@ -818,7 +922,7 @@ try {
                 $sessionId = $db->insert_id;
                 $students = $db->query("SELECT id FROM student WHERE class_section_id = $classId")->fetch_all(MYSQLI_ASSOC);
                 foreach ($students as $s) {
-                    $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, 'absent')");
+                    $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
                     $stmt2->bind_param("ii", $sessionId, $s['id']);
                     $stmt2->execute();
                 }
@@ -857,7 +961,7 @@ try {
             $sessionId = $db->insert_id;
             $students = $db->query("SELECT id FROM student WHERE class_section_id = {$data['class_id']}")->fetch_all(MYSQLI_ASSOC);
             foreach ($students as $s) {
-                $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, 'absent')");
+                $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
                 $stmt2->bind_param("ii", $sessionId, $s['id']);
                 $stmt2->execute();
             }
@@ -869,7 +973,7 @@ try {
     elseif ($action === 'save_attendance') {
         $data = json_decode(file_get_contents("php://input"), true);
         $recordId = intval($data['record_id'] ?? 0);
-        $status = $data['status'] ?? 'absent';
+        $status = $data['status'] ?? '';
         $remarks = $data['remarks'] ?? '';
         $sessionId = intval($data['session_id'] ?? 0);
         $studentId = intval($data['student_id'] ?? 0);
@@ -1014,6 +1118,170 @@ try {
             echo ResponseAPI::success(['weekdays' => [1, 2, 3, 4, 5]], "Weekdays updated (column not yet migrated)");
         }
     }
+    elseif ($action === 'get_absent_report') {
+        $classId = intval($_GET['class_id']);
+        $year = intval($_GET['year'] ?? date('Y'));
+        $month = intval($_GET['month'] ?? date('n'));
+        $view = $_GET['view'] ?? 'month'; // 'week' or 'month'
+        
+        $weekdays = getAttendanceWeekdays($db, $classId);
+        
+        // Get students
+        $students = $db->query("SELECT * FROM student WHERE class_section_id = $classId ORDER BY last_name")->fetch_all(MYSQLI_ASSOC);
+        
+        // Get sessions for the period
+        if ($view === 'week') {
+            // Get current week dates
+            $startOfWeek = date('Y-m-d', strtotime("monday this week"));
+            $endOfWeek = date('Y-m-d', strtotime("sunday this week"));
+            $sessions = $db->query("SELECT * FROM attendance_session WHERE class_section_id = $classId AND date BETWEEN '$startOfWeek' AND '$endOfWeek' ORDER BY date")->fetch_all(MYSQLI_ASSOC);
+        } else {
+            // Get month sessions
+            $daysInMonth = cal_days_in_month(CAL_GREGORIAN, $month, $year);
+            $startDate = sprintf('%04d-%02d-01', $year, $month);
+            $endDate = sprintf('%04d-%02d-%02d', $year, $month, $daysInMonth);
+            $sessions = $db->query("SELECT * FROM attendance_session WHERE class_section_id = $classId AND date BETWEEN '$startDate' AND '$endDate' ORDER BY date")->fetch_all(MYSQLI_ASSOC);
+        }
+        
+        // Filter sessions by class weekdays
+        $classSessionDates = [];
+        foreach ($sessions as $s) {
+            $jsDay = (int)date('N', strtotime($s['date']));
+            if (in_array($jsDay, $weekdays)) {
+                $classSessionDates[] = $s['date'];
+            }
+        }
+        
+        if (empty($classSessionDates)) {
+            echo ResponseAPI::success(['report' => [], 'summary' => []]);
+            return;
+        }
+        
+        $placeholders = implode(',', array_fill(0, count($classSessionDates), '?'));
+        
+        // Get attendance records for these sessions
+        $sessionIdsStmt = $db->prepare("SELECT id FROM attendance_session WHERE class_section_id = ? AND date IN ($placeholders)");
+        $params = array_merge([$classId], $classSessionDates);
+        $types = 'i' . str_repeat('s', count($classSessionDates));
+        $sessionIdsStmt->bind_param($types, ...$params);
+        $sessionIdsStmt->execute();
+        $sessionIds = $sessionIdsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        $sessionIds = array_column($sessionIds, 'id');
+        
+        if (empty($sessionIds)) {
+            echo ResponseAPI::success(['report' => [], 'summary' => []]);
+            return;
+        }
+        
+        $sidPlaceholders = implode(',', array_fill(0, count($sessionIds), '?'));
+        $stmt = $db->prepare("SELECT ar.*, s.last_name, s.first_name, s.student_no, ase.date 
+            FROM attendance_record ar
+            JOIN student s ON ar.student_id = s.id
+            JOIN attendance_session ase ON ar.attendance_session_id = ase.id
+            WHERE ar.attendance_session_id IN ($sidPlaceholders) AND s.class_section_id = ?
+            ORDER BY s.last_name, ase.date");
+        $bindParams = array_merge($sessionIds, [$classId]);
+        $bindTypes = str_repeat('i', count($sessionIds)) . 'i';
+        $stmt->bind_param($bindTypes, ...$bindParams);
+        $stmt->execute();
+        $records = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        
+        // Build report per student
+        $report = [];
+        foreach ($students as $student) {
+            $studentRecords = array_filter($records, fn($r) => $r['student_id'] == $student['id']);
+            
+            $absentDates = [];
+            $consecutiveAbsent = 0;
+            $maxConsecutive = 0;
+            $totalAbsent = 0;
+            $totalPresent = 0;
+            $totalLate = 0;
+            $totalExcused = 0;
+            
+            // Sort records by date
+            usort($studentRecords, fn($a, $b) => strcmp($a['date'], $b['date']));
+            
+            foreach ($studentRecords as $r) {
+                if ($r['status'] === 'absent') {
+                    $absentDates[] = $r['date'];
+                    $totalAbsent++;
+                    $consecutiveAbsent++;
+                    $maxConsecutive = max($maxConsecutive, $consecutiveAbsent);
+                } else {
+                    $consecutiveAbsent = 0;
+                    if ($r['status'] === 'present') $totalPresent++;
+                    else if ($r['status'] === 'late') $totalLate++;
+                    else if ($r['status'] === 'excused') $totalExcused++;
+                }
+            }
+            
+            $shouldDrop = $maxConsecutive >= 3;
+            
+            $report[] = [
+                'student_id' => $student['id'],
+                'student_no' => $student['student_no'],
+                'name' => $student['last_name'] . ', ' . $student['first_name'],
+                'total_sessions' => count($classSessionDates),
+                'present' => $totalPresent,
+                'absent' => $totalAbsent,
+                'late' => $totalLate,
+                'excused' => $totalExcused,
+                'absent_dates' => $absentDates,
+                'max_consecutive_absent' => $maxConsecutive,
+                'should_drop' => $shouldDrop
+            ];
+        }
+        
+        // Summary
+        $summary = [
+            'total_students' => count($students),
+            'at_risk' => count(array_filter($report, fn($r) => $r['should_drop'])),
+            'total_sessions' => count($classSessionDates),
+            'period' => $view === 'week' ? 'This Week' : date('F Y', strtotime("$year-$month-01"))
+        ];
+        
+        echo ResponseAPI::success(['report' => $report, 'summary' => $summary]);
+    }
+    elseif ($action === 'drop_student') {
+        $data = json_decode(file_get_contents("php://input"), true);
+        $studentId = intval($data['student_id']);
+        $classId = intval($data['class_id']);
+        $reason = $data['reason'] ?? 'Excessive absences (3+ consecutive)';
+        
+        // Add status column if not exists
+        $colCheck = $db->query("SHOW COLUMNS FROM student LIKE 'status'");
+        if ($colCheck && $colCheck->num_rows === 0) {
+            $db->query("ALTER TABLE student ADD COLUMN status ENUM('active','dropped') DEFAULT 'active' AFTER student_no");
+        }
+        
+        $stmt = $db->prepare("UPDATE student SET status = 'dropped' WHERE id = ? AND class_section_id = ?");
+        $stmt->bind_param("ii", $studentId, $classId);
+        
+        if ($stmt->execute()) {
+            logAudit($db, $faculty_id, 'drop_student', 'student', $studentId,
+                null, json_encode(['reason' => $reason]));
+            echo ResponseAPI::success([], "Student dropped");
+        } else {
+            echo ResponseAPI::error("Failed to drop student");
+        }
+    }
+    elseif ($action === 'reinstate_student') {
+        $data = json_decode(file_get_contents("php://input"), true);
+        $studentId = intval($data['student_id']);
+        $classId = intval($data['class_id']);
+        
+        $stmt = $db->prepare("UPDATE student SET status = 'active' WHERE id = ? AND class_section_id = ?");
+        $stmt->bind_param("ii", $studentId, $classId);
+        
+        if ($stmt->execute()) {
+            logAudit($db, $faculty_id, 'reinstate_student', 'student', $studentId,
+                null, json_encode(['reason' => 'Manually reinstated']));
+            echo ResponseAPI::success([], "Student reinstated");
+        } else {
+            echo ResponseAPI::error("Failed to reinstate student");
+        }
+    }
     elseif ($action === 'log_audit') {
         $data = json_decode(file_get_contents("php://input"), true);
         logAudit($db, $faculty_id, $data['action'] ?? 'unknown', $data['table_name'] ?? '', 
@@ -1094,7 +1362,17 @@ try {
         $ay = $_GET['ay'] ?? '';
         
         $query = "SELECT ss.id, ss.student_no, ss.last_name, ss.first_name, ss.middle_initial,
-              ss.course_program, ss.year_level, ss.section, ss.academic_year
+              ss.course_program, ss.year_level, ss.section, ss.academic_year,
+              (SELECT cs.subject_id FROM student s JOIN class_section cs ON s.class_section_id = cs.id 
+               WHERE s.class_section_id IN (SELECT id FROM class_section WHERE faculty_id = $faculty_id 
+               AND course_program = ss.course_program AND year_level = ss.year_level 
+               AND section = ss.section AND academic_year = ss.academic_year) 
+               AND s.student_no = ss.student_no LIMIT 1) as subject_id,
+              (SELECT cs.semester FROM student s JOIN class_section cs ON s.class_section_id = cs.id 
+               WHERE s.class_section_id IN (SELECT id FROM class_section WHERE faculty_id = $faculty_id 
+               AND course_program = ss.course_program AND year_level = ss.year_level 
+               AND section = ss.section AND academic_year = ss.academic_year) 
+               AND s.student_no = ss.student_no LIMIT 1) as semester
               FROM section_student ss
               WHERE ss.faculty_id = ?";
         $params = [];
@@ -1128,6 +1406,8 @@ try {
         $year = intval($data['year_level']);
         $section = $db->real_escape_string($data['section']);
         $ay = $db->real_escape_string($data['academic_year']);
+        $subjectId = intval($data['subject_id'] ?? 0);
+        $semester  = intval($data['semester'] ?? 0);
 
         $roster = $db->prepare("INSERT INTO section_student
             (faculty_id, course_program, year_level, section, academic_year, last_name, first_name, middle_initial, student_no)
@@ -1139,11 +1419,30 @@ try {
             exit;
         }
         
-        // Find matching classes for this section
-        // Only use classes owned by the current faculty. A student number may
-        // legitimately exist in different faculty users' class rosters.
-        $classes = $db->query("SELECT id FROM class_section 
-            WHERE faculty_id = $faculty_id AND course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'")->fetch_all(MYSQLI_ASSOC);
+        // Find matching classes for this section, narrowing by subject + semester
+        // when provided so different subjects can have separate class rosters.
+        $classWhere = "faculty_id = $faculty_id AND course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'";
+        if ($subjectId > 0) {
+            $classWhere .= " AND subject_id = $subjectId";
+        }
+        if ($semester > 0) {
+            $classWhere .= " AND semester = $semester";
+        }
+        $classes = $db->query("SELECT id FROM class_section WHERE $classWhere")->fetch_all(MYSQLI_ASSOC);
+        
+        // Auto-create a class when none exists yet and a subject + semester are provided
+        $createdClassId = null;
+        if (empty($classes) && $subjectId > 0 && $semester > 0) {
+            $insertClass = $db->prepare("INSERT INTO class_section 
+                (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $insertClass->bind_param("iisisis", $subjectId, $faculty_id, $program, $year, $section, $semester, $ay);
+            if ($insertClass->execute()) {
+                $createdClassId = $db->insert_id;
+                createDefaultGradingSheets($db, $createdClassId, $faculty_id);
+                $classes[] = ['id' => $createdClassId];
+            }
+        }
         
         $enrolledCount = 0;
         $skippedCount = 0;
@@ -1179,7 +1478,8 @@ try {
         }
         echo ResponseAPI::success([
             'enrolled_in_classes' => $enrolledCount,
-            'skipped_existing' => $skippedCount
+            'skipped_existing' => $skippedCount,
+            'created_class' => $createdClassId
         ], $message, $enrolledCount > 0 ? 201 : 200);
     }
     elseif ($action === 'remove_section_student') {
@@ -1213,6 +1513,8 @@ try {
     elseif ($action === 'update_section_student') {
         $data = json_decode(file_get_contents("php://input"), true);
         $id = intval($data['id']);
+        $subjectId = intval($data['subject_id'] ?? 0);
+        $semester  = intval($data['semester'] ?? 0);
         
         $stmt = $db->prepare("SELECT student_no, course_program, year_level, section, academic_year
             FROM section_student WHERE id = ? AND faculty_id = ?");
@@ -1225,15 +1527,75 @@ try {
             exit;
         }
 
+        $oldStudentNo = $current['student_no'];
+        $newStudentNo = $data['student_no'] ?? $oldStudentNo;
+
         $stmt = $db->prepare("UPDATE section_student SET last_name = ?, first_name = ?, middle_initial = ?, student_no = ?
             WHERE id = ? AND faculty_id = ?");
-        $stmt->bind_param("ssssii", $data['last_name'], $data['first_name'], $data['middle_initial'], $data['student_no'], $id, $faculty_id);
+        $stmt->bind_param("ssssii", $data['last_name'], $data['first_name'], $data['middle_initial'], $newStudentNo, $id, $faculty_id);
         if (!$stmt->execute()) {
             echo ResponseAPI::error("Failed to update student: " . $stmt->error);
             exit;
         }
-        
-        echo ResponseAPI::success([], "Student updated");
+
+        // Sync updated info to matching class rosters.
+        // When student_no changed, search by the old value; otherwise use the new one.
+        $searchStudentNo = ($newStudentNo !== $oldStudentNo) ? $oldStudentNo : $newStudentNo;
+
+        $program = $db->real_escape_string($data['course_program'] ?? $current['course_program']);
+        $year    = intval($data['year_level'] ?? $current['year_level']);
+        $section = $db->real_escape_string($data['section'] ?? $current['section']);
+        $ay      = $db->real_escape_string($data['academic_year'] ?? $current['academic_year']);
+
+        $classWhere = "faculty_id = $faculty_id AND course_program = '$program' AND year_level = $year AND section = '$section' AND academic_year = '$ay'";
+        if ($subjectId > 0) {
+            $classWhere .= " AND subject_id = $subjectId";
+        }
+        if ($semester > 0) {
+            $classWhere .= " AND semester = $semester";
+        }
+        $classes = $db->query("SELECT id FROM class_section WHERE $classWhere")->fetch_all(MYSQLI_ASSOC);
+
+        $createdClassId = null;
+        if (empty($classes) && $subjectId > 0 && $semester > 0) {
+            $insertClass = $db->prepare("INSERT INTO class_section 
+                (subject_id, faculty_id, course_program, year_level, section, semester, academic_year) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $insertClass->bind_param("iisisis", $subjectId, $faculty_id, $program, $year, $section, $semester, $ay);
+            if ($insertClass->execute()) {
+                $createdClassId = $db->insert_id;
+                createDefaultGradingSheets($db, $createdClassId, $faculty_id);
+                $classes[] = ['id' => $createdClassId];
+            }
+        }
+
+        $syncCount = 0;
+        foreach ($classes as $class) {
+            // Check if student already exists in this class
+            $check = $db->prepare("SELECT id FROM student WHERE class_section_id = ? AND student_no = ?");
+            $check->bind_param("is", $class['id'], $searchStudentNo);
+            $check->execute();
+            $existing = $check->get_result()->fetch_assoc();
+
+            if ($existing) {
+                $update = $db->prepare("UPDATE student SET last_name = ?, first_name = ?, middle_initial = ?, student_no = ? WHERE id = ?");
+                $update->bind_param("sssssi", $data['last_name'], $data['first_name'], $data['middle_initial'], $newStudentNo, $existing['id']);
+                if ($update->execute()) {
+                    $syncCount++;
+                }
+            } else {
+                // Student not yet in this class — add them
+                $insert = $db->prepare("INSERT INTO student (class_section_id, last_name, first_name, middle_initial, student_no) 
+                    VALUES (?, ?, ?, ?, ?)");
+                $insert->bind_param("issss", $class['id'], $data['last_name'], $data['first_name'], $data['middle_initial'], $newStudentNo);
+                if ($insert->execute()) {
+                    $syncCount++;
+                }
+            }
+        }
+
+        $message = "Student updated" . ($syncCount > 0 ? " ($syncCount class roster(s) synced)" : "");
+        echo ResponseAPI::success(['synced_classes' => $syncCount, 'created_class' => $createdClassId], $message);
     }
     elseif ($action === 'update_class_weights') {
         $data = json_decode(file_get_contents("php://input"), true);
@@ -1535,6 +1897,150 @@ try {
             generateGradingSheetPdf($class, $gradesData);
         }
     }
+    elseif ($action === 'save_grading_sheet_template') {
+        $classId = intval($_POST['class_id'] ?? $_GET['class_id'] ?? 0);
+        $data = json_decode(file_get_contents("php://input"), true);
+        
+        if (!$classId) {
+            echo ResponseAPI::error("Invalid class ID");
+            exit;
+        }
+        
+        $class = $db->query("SELECT cs.*, s.code, s.title FROM class_section cs JOIN subject s ON cs.subject_id = s.id WHERE cs.id = $classId")->fetch_assoc();
+        if (!$class) {
+            echo ResponseAPI::error("Class not found");
+            exit;
+        }
+        
+        // Get or create template
+        $stmt = $db->prepare("SELECT * FROM grading_sheet_template WHERE class_section_id = ?");
+        $stmt->bind_param("i", $classId);
+        $stmt->execute();
+        $template = $stmt->get_result()->fetch_assoc();
+        
+        $academicYear = $data['academic_year'] ?? $class['academic_year'];
+        $semester = $data['semester'] ?? $class['semester'];
+        $courseNumber = $data['course_number'] ?? $class['code'];
+        $courseTitle = $data['course_title'] ?? $class['title'];
+        $courseYearSection = $data['course_year_section'] ?? $class['course_program'] . ' ' . $class['year_level'] . '-' . $class['section'];
+        $studentsPerPage = intval($data['students_per_page'] ?? 20);
+        $pageSize = $data['page_size'] ?? 'A4';
+        $marginTop = intval($data['margin_top'] ?? 15);
+        $marginBottom = intval($data['margin_bottom'] ?? 15);
+        $marginLeft = intval($data['margin_left'] ?? 15);
+        $marginRight = intval($data['margin_right'] ?? 15);
+        
+        if ($template) {
+            $stmt = $db->prepare("UPDATE grading_sheet_template SET 
+                academic_year = ?, semester = ?, course_number = ?, course_title = ?, course_year_section = ?,
+                students_per_page = ?, page_size = ?, margin_top = ?, margin_bottom = ?, margin_left = ?, margin_right = ?
+                WHERE id = ?");
+            $stmt->bind_param("sssssiiiiiii", $academicYear, $semester, $courseNumber, $courseTitle, $courseYearSection,
+                $studentsPerPage, $pageSize, $marginTop, $marginBottom, $marginLeft, $marginRight, $template['id']);
+            $stmt->execute();
+            $templateId = $template['id'];
+        } else {
+            $stmt = $db->prepare("INSERT INTO grading_sheet_template 
+                (class_section_id, academic_year, semester, course_number, course_title, course_year_section,
+                students_per_page, page_size, margin_top, margin_bottom, margin_left, margin_right)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("isssssiiiiii", $classId, $academicYear, $semester, $courseNumber, $courseTitle, $courseYearSection,
+                $studentsPerPage, $pageSize, $marginTop, $marginBottom, $marginLeft, $marginRight);
+            $stmt->execute();
+            $templateId = $db->insert_id;
+        }
+        
+        // Generate items from student data
+        $students = $db->query("SELECT * FROM student WHERE class_section_id = $classId ORDER BY last_name")->fetch_all(MYSQLI_ASSOC);
+        $gradesData = [];
+        foreach ($students as $student) {
+            $grades = GradingHelper::calculateStudentGrades($db, $classId, $student['id']);
+            $gradesData[] = array_merge($student, $grades);
+        }
+        
+        // Clear existing items
+        $db->query("DELETE FROM grading_sheet_items WHERE template_id = $templateId");
+        
+        // Insert new items
+        $stmt = $db->prepare("INSERT INTO grading_sheet_items 
+            (template_id, student_id, student_number, last_name, first_name, middle_initial,
+            midterm_rating, midterm_remarks, numerical_rating, final_grade, unit_credit, remarks, page_number, row_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        
+        $studentsPerPage = intval($data['students_per_page'] ?? 20);
+        foreach ($gradesData as $i => $student) {
+            $pageNum = floor($i / $studentsPerPage) + 1;
+            $rowOrder = $i % $studentsPerPage;
+            
+            $name = trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_initial'] ?? '') . '.');
+            $midtermRating = round($student['midterm']['grade'] ?? 0);
+            $midtermRemarks = $student['midterm']['remarks'] ?? 'INC';
+            $finalRating = round($student['final']['grade'] ?? 0);
+            $finalGrade = (string)($student['overall']['grade_point'] ?? 'INC');
+            $remarks = $student['overall']['remarks'] ?? 'INC';
+            
+            $stmt->bind_param("iiisssssisii", $templateId, $student['id'], $i + 1, $student['last_name'], $student['first_name'],
+                $student['middle_initial'], $midtermRating ?: 'INC', $midtermRemarks, $finalRating ?: 'INC',
+                $finalGrade, 3, $remarks, $pageNum, $rowOrder);
+            $stmt->execute();
+        }
+        
+        echo ResponseAPI::success(['template_id' => $templateId], "Grading sheet template saved");
+    }
+    elseif ($action === 'get_grading_sheet_template') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        
+        $stmt = $db->prepare("SELECT * FROM grading_sheet_template WHERE class_section_id = ?");
+        $stmt->bind_param("i", $classId);
+        $stmt->execute();
+        $template = $stmt->get_result()->fetch_assoc();
+        
+        if (!$template) {
+            echo ResponseAPI::error("Template not found");
+            exit;
+        }
+        
+        // Get items
+        $items = $db->query("SELECT * FROM grading_sheet_items WHERE template_id = {$template['id']} ORDER BY page_number, row_order")->fetch_all(MYSQLI_ASSOC);
+        $template['items'] = $items;
+        
+        echo ResponseAPI::success($template);
+    }
+    elseif ($action === 'export_grading_sheet') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $format = $_GET['format'] ?? 'pdf';
+        $templateId = intval($_GET['template_id'] ?? 0);
+        
+        if (!$templateId) {
+            $stmt = $db->prepare("SELECT id FROM grading_sheet_template WHERE class_section_id = ?");
+            $stmt->bind_param("i", $classId);
+            $stmt->execute();
+            $template = $stmt->get_result()->fetch_assoc();
+            if (!$template) {
+                echo ResponseAPI::error("Template not found. Generate template first.");
+                exit;
+            }
+            $templateId = $template['id'];
+        }
+        
+        // Log export
+        $facultyId = $auth->getFacultyId();
+        $fileName = "GradingSheet_{$classId}_{$format}_" . date('Ymd_His');
+        $stmt = $db->prepare("INSERT INTO grading_sheet_exports (template_id, export_format, exported_by, file_name, student_count) VALUES (?, ?, ?, ?, ?)");
+        $studentCount = $db->query("SELECT COUNT(*) as c FROM grading_sheet_items WHERE template_id = $templateId")->fetch_assoc()['c'];
+        $stmt->bind_param("isisi", $templateId, $format, $facultyId, $fileName, $studentCount);
+        $stmt->execute();
+        
+        if ($format === 'csv') {
+            exportGradingSheetCsv($templateId);
+        } elseif ($format === 'xlsx') {
+            exportGradingSheetXlsx($templateId);
+        } elseif ($format === 'doc') {
+            exportGradingSheetDoc($templateId);
+        } else {
+            exportGradingSheetPdf($templateId);
+        }
+    }
     // Dynamic Grade Category CRUD Endpoints
     elseif ($action === 'get_grade_templates') {
         $result = $db->query("SELECT * FROM grade_category_template WHERE is_active = TRUE ORDER BY sort_order");
@@ -1704,7 +2210,7 @@ try {
     else {
         echo ResponseAPI::error("Invalid action", 404);
     }
-} catch (Exception $e) {
+} catch (\Exception | \Error $e) {
     ob_clean();
     echo ResponseAPI::error($e->getMessage(), 500);
 }
@@ -1754,17 +2260,25 @@ function syncGradeTables($db, $classId, $period) {
             }
         }
         
-        // Remove items that no longer exist in config
+        // Remove items that no longer exist in config - but PRESERVE items with student scores
         $existingItemConfigIds = array_column($items, 'id');
         if (!empty($existingItemConfigIds)) {
             $placeholders = implode(',', array_fill(0, count($existingItemConfigIds), '?'));
             $types = str_repeat('i', count($existingItemConfigIds));
             $params = array_merge([$categoryId], $existingItemConfigIds);
-            $stmt = $db->prepare("DELETE FROM grade_item WHERE grade_category_id = ? AND item_config_id NOT IN ($placeholders)");
+            // Only delete items that have NO student scores
+            $stmt = $db->prepare("DELETE gi FROM grade_item gi 
+                LEFT JOIN grade_score gs ON gs.grade_item_id = gi.id 
+                WHERE gi.grade_category_id = ? 
+                AND gi.item_config_id NOT IN ($placeholders) 
+                AND gs.id IS NULL");
             bindDynamicParams($stmt, "i$types", $params);
             $stmt->execute();
         } else {
-            $db->query("DELETE FROM grade_item WHERE grade_category_id = $categoryId");
+            // Delete all items in category that have NO student scores
+            $db->query("DELETE gi FROM grade_item gi 
+                LEFT JOIN grade_score gs ON gs.grade_item_id = gi.id 
+                WHERE gi.grade_category_id = $categoryId AND gs.id IS NULL");
         }
     }
     
@@ -1792,14 +2306,41 @@ function removeSyncedConfigRows($db, $configIds) {
 
     $idList = implode(',', $configIds);
 
-    // Scores depend on grade_item, which depends on grade_category.
-    $db->query("DELETE gs FROM grade_score gs
-        INNER JOIN grade_item gi ON gi.id = gs.grade_item_id
+    // Get grade_item IDs that have scores (to preserve)
+    $result = $db->query("SELECT gi.id FROM grade_item gi
         INNER JOIN grade_category gc ON gc.id = gi.grade_category_id
+        INNER JOIN grade_score gs ON gs.grade_item_id = gi.id
         WHERE gc.config_id IN ($idList)");
+    $scoredItemIds = [];
+    while ($row = $result->fetch_assoc()) {
+        $scoredItemIds[] = $row['id'];
+    }
+
+    // For items with scores: orphan them (remove config link)
+    if (!empty($scoredItemIds)) {
+        $placeholders = implode(',', array_fill(0, count($scoredItemIds), '?'));
+        $stmt = $db->prepare("UPDATE grade_item SET item_config_id = NULL WHERE id IN ($placeholders)");
+        $types = str_repeat('i', count($scoredItemIds));
+        $stmt->bind_param($types, ...$scoredItemIds);
+        $stmt->execute();
+    }
+
+    // Delete grade_items WITHOUT scores
     $db->query("DELETE gi FROM grade_item gi
         INNER JOIN grade_category gc ON gc.id = gi.grade_category_id
-        WHERE gc.config_id IN ($idList)");
+        LEFT JOIN grade_score gs ON gs.grade_item_id = gi.id
+        WHERE gc.config_id IN ($idList) AND gs.id IS NULL");
+
+    // For remaining items with scores: clear grade_category_id to allow category deletion
+    if (!empty($scoredItemIds)) {
+        $placeholders = implode(',', array_fill(0, count($scoredItemIds), '?'));
+        $stmt = $db->prepare("UPDATE grade_item SET grade_category_id = NULL WHERE id IN ($placeholders)");
+        $types = str_repeat('i', count($scoredItemIds));
+        $stmt->bind_param($types, ...$scoredItemIds);
+        $stmt->execute();
+    }
+
+    // Now delete grade_categories (FK constraints cleared)
     $db->query("DELETE FROM grade_category WHERE config_id IN ($idList)");
 }
 
@@ -1871,7 +2412,7 @@ function generateAttendanceCSV($db, $class, $students, $sessions) {
         foreach ($sessions as $session) {
             $record = $db->query("SELECT status FROM attendance_record 
                 WHERE attendance_session_id = {$session['id']} AND student_id = {$student['id']}")->fetch_assoc();
-            $status = $record ? $record['status'] : 'absent';
+            $status = $record ? $record['status'] : '';
             $row[] = ucfirst($status);
             
             if ($status === 'present') $present++;
@@ -2286,13 +2827,57 @@ function generateEGradingPdf($class, $gradesData) {
 }
 
 function generateGradingSheetExcel($class, $gradesData) {
-    header('Content-Type: application/vnd.ms-excel; charset=UTF-8');
-    header('Content-Disposition: attachment; filename="GradingSheet_' . preg_replace('/[^a-z0-9_-]+/i', '_', $class['code']) . '.xls"');
-    echo gradingSheetHtml($class, $gradesData, true);
+    $code = htmlspecialchars($class['code'] ?? '', ENT_QUOTES, 'UTF-8');
+    $title = htmlspecialchars($class['title'] ?? '', ENT_QUOTES, 'UTF-8');
+    $program = htmlspecialchars($class['course_program'] ?? '', ENT_QUOTES, 'UTF-8');
+    $year = htmlspecialchars($class['year_level'] ?? '', ENT_QUOTES, 'UTF-8');
+    $section = htmlspecialchars($class['section'] ?? '', ENT_QUOTES, 'UTF-8');
+    $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
+    $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
+
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="GradingSheet_' . preg_replace('/[^a-z0-9_-]+/i', '_', $class['code']) . '.csv"');
+
+    $output = fopen('php://output', 'w');
+    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF)); // UTF-8 BOM
+
+    // Header rows
+    fputcsv($output, ['Course Number:', $code]);
+    fputcsv($output, ['Course Title:', $title]);
+    fputcsv($output, ['Semester/AY:', $semester . ' Semester/Semester AY ' . $academicYear]);
+    fputcsv($output, ['Course and Year:', $program . ' ' . $year . '-' . $section]);
+    fputcsv($output, []); // empty row
+
+    // Table headers
+    fputcsv($output, ['No.', 'Name of Students (Last, First, MI)', 'Midterm Rating', 'Midterm Remarks', 'Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks']);
+
+    foreach ($gradesData as $i => $student) {
+        $name = trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_initial'] ?? '') . '.');
+        $midtermRating = round($student['midterm']['grade'] ?? 0);
+        $midtermRemarks = $student['midterm']['remarks'] ?? 'INC';
+        $finalRating = round($student['final']['grade'] ?? 0);
+        $finalGrade = (string)($student['overall']['grade_point'] ?? 'INC');
+        $remarks = $student['overall']['remarks'] ?? 'INC';
+
+        fputcsv($output, [
+            $i + 1,
+            $name,
+            $midtermRating ?: 'INC',
+            $midtermRemarks,
+            $finalRating ?: 'INC',
+            $finalGrade,
+            3,
+            $remarks
+        ]);
+    }
+    fclose($output);
 }
 
 function generateGradingSheetPdf($class, $gradesData) {
-    echo gradingSheetHtml($class, $gradesData, false);
+    $html = gradingSheetHtml($class, $gradesData, false);
+    // Add auto-print script for browser print-to-PDF
+    $html = str_replace('</body>', '<script>window.onload = function() { window.print(); };</script></body>', $html);
+    echo $html;
 }
 
 function generateGradingSheetDoc($class, $gradesData) {
@@ -2310,14 +2895,35 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
     $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
     $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
 
+    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $footerPath = __DIR__ . '/../assets/images/footer.png';
+    $logoPublicUrl = '';
+    $footerPublicUrl = '';
+    if (file_exists($logoPath)) {
+        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath);
+    }
+    if (file_exists($footerPath)) {
+        $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
+    }
+
+    $studentsPerPage = 20;
+    $totalStudents = count($gradesData);
+    $totalPages = ceil($totalStudents / $studentsPerPage);
+
+    // Use public URL for reliable rendering in browser print-to-PDF
+    $logoSrc = $logoPublicUrl;
+    $footerSrc = $footerPublicUrl;
+
     $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . $code . '</title><style>
-        @page { size: landscape; margin: 10mm; }
-        body { font-family: Arial, sans-serif; font-size: 10px; color: #000; margin: 12px; }
-        .document-header { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-        .document-header td { border: 1px solid #555; padding: 5px; vertical-align: middle; }
-        .logo-box { width: 80px; height: 70px; text-align: center; font-size: 9px; font-weight: bold; }
-        .document-title { text-align: center; font-size: 16px; font-weight: bold; }
-        .meta { margin: 4px 0; font-weight: bold; }
+        @page { size: A4; margin: 15mm; }
+        body { font-family: Arial, sans-serif; font-size: 10px; color: #000; margin: 0; }
+        .page { page-break-after: always; min-height: 100vh; padding: 20px; box-sizing: border-box; }
+        .page:last-child { page-break-after: auto; }
+        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
+        .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
+        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
+        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+        .course-info strong { font-weight: bold; }
         .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; }
         .grade-sheet th { background: #d9d9d9; font-weight: bold; }
@@ -2325,9 +2931,85 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
         .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
         .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
     </style></head><body>';
-    $html .= '<table class="document-header"><tr><td class="logo-box">CAPIZ STATE UNIVERSITY</td><td>Document Type:<br><b>FORM</b><br><br>Document Title:<br><b>GRADE SHEET</b></td><td>Document Code: <b>REG-F12</b><br>Revision No.: <b>00</b><br>Effective Date: <b>June 25, 2018</b></td></tr></table>';
-    $html .= '<div class="meta">Course Number: ' . $code . '</div><div class="meta">Course Title: ' . $title . '</div>';
-    $html .= '<div class="meta">' . $semester . ' Semester/Semester AY ' . $academicYear . '</div><div class="meta">Course and Year: ' . $program . ' ' . $year . '-' . $section . '</div>';
+
+    for ($page = 0; $page < $totalPages; $page++) {
+        $html .= '<div class="page">';
+
+        if ($logoSrc) {
+            $html .= '<img class="header-image" src="' . $logoSrc . '" alt="University Header">';
+        }
+        $html .= '<div class="course-info">';
+        $html .= '<div class="course-info-left"><span><strong>Course Number:</strong> ' . $code . '</span><span><strong>Course Title:</strong> ' . $title . '</span></div>';
+        $html .= '<div class="course-info-right"><span><strong>' . $semester . ' Semester/Semester AY ' . $academicYear . '</strong></span><span><strong>Course and Year:</strong> ' . $program . ' ' . $year . '-' . $section . '</span></div>';
+        $html .= '</div>';
+
+        $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+
+        $startIdx = $page * $studentsPerPage;
+        $endIdx = min($startIdx + $studentsPerPage, $totalStudents);
+        for ($i = $startIdx; $i < $endIdx; $i++) {
+            $student = $gradesData[$i];
+            $name = htmlspecialchars(trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
+            $midtermRating = round($student['midterm']['grade'] ?? 0);
+            $midtermRemarks = htmlspecialchars($student['midterm']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
+            $finalRating = round($student['final']['grade'] ?? 0);
+            $finalGrade = htmlspecialchars((string)($student['overall']['grade_point'] ?? 'INC'), ENT_QUOTES, 'UTF-8');
+            $remarks = htmlspecialchars($student['overall']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
+            $html .= '<tr><td>' . ($i + 1) . '</td><td class="name">' . $name . '</td><td>' . ($midtermRating ?: 'INC') . '</td><td>' . $midtermRemarks . '</td><td>' . ($finalRating ?: 'INC') . '</td><td>' . $finalGrade . '</td><td>3</td><td>' . $remarks . '</td></tr>';
+        }
+        $html .= '</tbody></table>';
+        if ($footerSrc) {
+            $html .= '<img class="footer-image" src="' . $footerSrc . '" alt="Footer" style="width: 100%; max-width: 100%; height: auto; margin-top: 20px; display: block;">';
+        }
+        $html .= '</div>';
+    }
+    return $html . '</body></html>';
+}
+
+function gradingSheetExcel($class, $gradesData) {
+    $code = htmlspecialchars($class['code'] ?? '', ENT_QUOTES, 'UTF-8');
+    $title = htmlspecialchars($class['title'] ?? '', ENT_QUOTES, 'UTF-8');
+    $program = htmlspecialchars($class['course_program'] ?? '', ENT_QUOTES, 'UTF-8');
+    $year = htmlspecialchars($class['year_level'] ?? '', ENT_QUOTES, 'UTF-8');
+    $section = htmlspecialchars($class['section'] ?? '', ENT_QUOTES, 'UTF-8');
+    $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
+    $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
+
+    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $footerPath = __DIR__ . '/../assets/images/footer.png';
+    $logoPublicUrl = '';
+    $footerPublicUrl = '';
+    if (file_exists($logoPath)) {
+        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath);
+    }
+    if (file_exists($footerPath)) {
+        $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
+    }
+
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . $code . '</title><style>
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #000; }
+        .course-info { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 12px; }
+        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
+        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+        .course-info strong { font-weight: bold; }
+        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 6px 8px; text-align: center; vertical-align: middle; }
+        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
+        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
+        .footer-image { width: 100%; max-width: 100%; height: auto; margin-top: 20px; display: block; }
+    </style></head><body>';
+
+    if ($logoPublicUrl) {
+        $html .= '<img class="header-image" src="' . $logoPublicUrl . '" alt="University Header">';
+    }
+    $html .= '<div class="course-info">';
+    $html .= '<div class="course-info-left"><span><strong>Course Number:</strong> ' . $code . '</span><span><strong>Course Title:</strong> ' . $title . '</span></div>';
+    $html .= '<div class="course-info-right"><span><strong>' . $semester . ' Semester/Semester AY ' . $academicYear . '</strong></span><span><strong>Course and Year:</strong> ' . $program . ' ' . $year . '-' . $section . '</span></div>';
+    $html .= '</div>';
+
     $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
 
     foreach ($gradesData as $i => $student) {
@@ -2339,7 +3021,212 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
         $remarks = htmlspecialchars($student['overall']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
         $html .= '<tr><td>' . ($i + 1) . '</td><td class="name">' . $name . '</td><td>' . ($midtermRating ?: 'INC') . '</td><td>' . $midtermRemarks . '</td><td>' . ($finalRating ?: 'INC') . '</td><td>' . $finalGrade . '</td><td>3</td><td>' . $remarks . '</td></tr>';
     }
+    if ($footerPublicUrl) {
+        $html .= '<img class="footer-image" src="' . $footerPublicUrl . '" alt="Footer">';
+    }
     return $html . '</tbody></table></body></html>';
+}
+
+// Export functions using saved template
+function exportGradingSheetCsv($templateId) {
+    global $db;
+    
+    $stmt = $db->prepare("SELECT * FROM grading_sheet_template WHERE id = ?");
+    $stmt->bind_param("i", $templateId);
+    $stmt->execute();
+    $template = $stmt->get_result()->fetch_assoc();
+    
+    $items = $db->query("SELECT * FROM grading_sheet_items WHERE template_id = $templateId ORDER BY page_number, row_order")->fetch_all(MYSQLI_ASSOC);
+    
+    header('Content-Type: text/csv; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="GradingSheet_' . preg_replace('/[^a-z0-9_-]+/i', '_', $template['course_number']) . '.csv"');
+    
+    $output = fopen('php://output', 'w');
+    fprintf($output, chr(0xEF).chr(0xBB).chr(0xBF)); // UTF-8 BOM
+    
+    // Header rows
+    fputcsv($output, ['Course Number:', $template['course_number']]);
+    fputcsv($output, ['Course Title:', $template['course_title']]);
+    fputcsv($output, ['Semester/AY:', $template['semester'] . ' Semester/Semester AY ' . $template['academic_year']]);
+    fputcsv($output, ['Course and Year:', $template['course_year_section']]);
+    fputcsv($output, []); // empty row
+    
+    // Table headers
+    fputcsv($output, ['No.', 'Name of Students (Last, First, MI)', 'Midterm Rating', 'Midterm Remarks', 'Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks']);
+    
+    foreach ($items as $i => $item) {
+        $name = trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.');
+        fputcsv($output, [
+            $item['student_number'] ?? $i + 1,
+            $name,
+            $item['midterm_rating'],
+            $item['midterm_remarks'],
+            $item['numerical_rating'],
+            $item['final_grade'],
+            $item['unit_credit'] ?? 3,
+            $item['remarks']
+        ]);
+    }
+    fclose($output);
+}
+
+function exportGradingSheetXlsx($templateId) {
+    global $db;
+    
+    // Simple HTML-based Excel export (compatible without PhpSpreadsheet)
+    $stmt = $db->prepare("SELECT * FROM grading_sheet_template WHERE id = ?");
+    $stmt->bind_param("i", $templateId);
+    $stmt->execute();
+    $template = $stmt->get_result()->fetch_assoc();
+    
+    $items = $db->query("SELECT * FROM grading_sheet_items WHERE template_id = $templateId ORDER BY page_number, row_order")->fetch_all(MYSQLI_ASSOC);
+    
+    header('Content-Type: application/vnd.ms-excel; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="GradingSheet_' . preg_replace('/[^a-z0-9_-]+/i', '_', $template['course_number']) . '.xls"');
+    
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet</title><style>
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #000; }
+        .course-info { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 12px; }
+        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
+        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+        .course-info strong { font-weight: bold; }
+        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 6px 8px; text-align: center; vertical-align: middle; }
+        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
+        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+    </style></head><body>';
+    
+    $html .= '<div class="course-info">';
+    $html .= '<div class="course-info-left"><span><strong>Course Number:</strong> ' . htmlspecialchars($template['course_number']) . '</span><span><strong>Course Title:</strong> ' . htmlspecialchars($template['course_title']) . '</span></div>';
+    $html .= '<div class="course-info-right"><span><strong>' . htmlspecialchars($template['semester']) . ' Semester/Semester AY ' . htmlspecialchars($template['academic_year']) . '</strong></span><span><strong>Course and Year:</strong> ' . htmlspecialchars($template['course_year_section']) . '</span></div>';
+    $html .= '</div>';
+    
+    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+    
+    foreach ($items as $item) {
+        $name = htmlspecialchars(trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
+        $html .= '<tr><td>' . ($item['student_number'] ?? '') . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['midterm_rating']) . '</td><td>' . htmlspecialchars($item['midterm_remarks']) . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
+    }
+    echo $html . '</tbody></table></body></html>';
+}
+
+function exportGradingSheetDoc($templateId) {
+    global $db;
+    
+    $stmt = $db->prepare("SELECT * FROM grading_sheet_template WHERE id = ?");
+    $stmt->bind_param("i", $templateId);
+    $stmt->execute();
+    $template = $stmt->get_result()->fetch_assoc();
+    
+    $items = $db->query("SELECT * FROM grading_sheet_items WHERE template_id = $templateId ORDER BY page_number, row_order")->fetch_all(MYSQLI_ASSOC);
+    
+    header('Content-Type: application/msword; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="GradingSheet_' . preg_replace('/[^a-z0-9_-]+/i', '_', $template['course_number']) . '.doc"');
+    
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet</title><style>
+        body { font-family: Arial, sans-serif; font-size: 11px; color: #000; }
+        .course-info { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 12px; }
+        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
+        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+        .course-info strong { font-weight: bold; }
+        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 6px 8px; text-align: center; vertical-align: middle; }
+        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
+        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+    </style></head><body>';
+    
+    $html .= '<div class="course-info">';
+    $html .= '<div class="course-info-left"><span><strong>Course Number:</strong> ' . htmlspecialchars($template['course_number']) . '</span><span><strong>Course Title:</strong> ' . htmlspecialchars($template['course_title']) . '</span></div>';
+    $html .= '<div class="course-info-right"><span><strong>' . htmlspecialchars($template['semester']) . ' Semester/Semester AY ' . htmlspecialchars($template['academic_year']) . '</strong></span><span><strong>Course and Year:</strong> ' . htmlspecialchars($template['course_year_section']) . '</span></div>';
+    $html .= '</div>';
+    
+    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+    
+    foreach ($items as $item) {
+        $name = htmlspecialchars(trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
+        $html .= '<tr><td>' . ($item['student_number'] ?? '') . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['midterm_rating']) . '</td><td>' . htmlspecialchars($item['midterm_remarks']) . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
+    }
+    echo $html . '</tbody></table></body></html>';
+}
+
+function exportGradingSheetPdf($templateId) {
+    global $db;
+    
+    $stmt = $db->prepare("SELECT * FROM grading_sheet_template WHERE id = ?");
+    $stmt->bind_param("i", $templateId);
+    $stmt->execute();
+    $template = $stmt->get_result()->fetch_assoc();
+    
+    $items = $db->query("SELECT * FROM grading_sheet_items WHERE template_id = $templateId ORDER BY page_number, row_order")->fetch_all(MYSQLI_ASSOC);
+    
+    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $footerPath = __DIR__ . '/../assets/images/footer.png';
+    $logoPublicUrl = '';
+    $footerPublicUrl = '';
+    if (file_exists($logoPath)) {
+        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath);
+    }
+    if (file_exists($footerPath)) {
+        $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
+    }
+    
+    $studentsPerPage = $template['students_per_page'] ?? 20;
+    $totalItems = count($items);
+    $totalPages = ceil($totalItems / $studentsPerPage);
+    
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . htmlspecialchars($template['course_number']) . '</title><style>
+        @page { size: A4; margin: 15mm; }
+        body { font-family: Arial, sans-serif; font-size: 10px; color: #000; margin: 0; }
+        .page { page-break-after: always; min-height: 100vh; padding: 20px; box-sizing: border-box; }
+        .page:last-child { page-break-after: auto; }
+        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
+        .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
+        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
+        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+        .course-info strong { font-weight: bold; }
+        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; }
+        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
+        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+        .footer-image { width: 100%; max-width: 100%; height: auto; margin-top: 20px; display: block; }
+    </style></head><body>';
+    
+    for ($page = 0; $page < $totalPages; $page++) {
+        $html .= '<div class="page">';
+        
+        if ($logoPublicUrl) {
+            $html .= '<img class="header-image" src="' . $logoPublicUrl . '" alt="University Header">';
+        }
+        $html .= '<div class="course-info">';
+        $html .= '<div class="course-info-left"><span><strong>Course Number:</strong> ' . htmlspecialchars($template['course_number']) . '</span><span><strong>Course Title:</strong> ' . htmlspecialchars($template['course_title']) . '</span></div>';
+        $html .= '<div class="course-info-right"><span><strong>' . htmlspecialchars($template['semester']) . ' Semester/Semester AY ' . htmlspecialchars($template['academic_year']) . '</strong></span><span><strong>Course and Year:</strong> ' . htmlspecialchars($template['course_year_section']) . '</span></div>';
+        $html .= '</div>';
+        
+        $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+        
+        $startIdx = $page * $studentsPerPage;
+        $endIdx = min($startIdx + $studentsPerPage, $totalItems);
+        for ($i = $startIdx; $i < $endIdx; $i++) {
+            $item = $items[$i];
+            $name = htmlspecialchars(trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
+            $html .= '<tr><td>' . ($item['student_number'] ?? $i + 1) . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['midterm_rating']) . '</td><td>' . htmlspecialchars($item['midterm_remarks']) . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
+        }
+        $html .= '</tbody></table>';
+        if ($footerPublicUrl) {
+            $html .= '<img class="footer-image" src="' . $footerPublicUrl . '" alt="Footer">';
+        }
+        $html .= '</div>';
+    }
+    
+    // Add auto-print script
+    $html = str_replace('</body>', '<script>window.onload = function() { window.print(); };</script></body>', $html);
+    echo $html;
 }
 ?>
 

@@ -40,9 +40,9 @@ class GradingHelper {
         return self::transmute($rawTotal, $maxTotal);
     }
     
-    // Calculate period grade (weighted average of 4 components)
-    // Components: Class Participation (20%), Problem Set (20%), Quizzes (30%), Periodical Exam (30%)
-    public static function calculatePeriodGrade($componentScores, $weights = null) {
+    // Calculate period grade (weighted average of components that have scores)
+    // Only weights components that have at least one scored item
+    public static function calculatePeriodGrade($componentScores, $componentDetails, $weights = null) {
         $weights = $weights ?: [
             'class_participation' => 0.20,
             'problem_set' => 0.20,
@@ -51,24 +51,60 @@ class GradingHelper {
         ];
         
         $weightedSum = 0;
+        $totalWeight = 0;
+        
         foreach ($componentScores as $component => $score) {
-            if (isset($weights[$component])) {
+            if (!isset($weights[$component])) continue;
+            
+            // Check if this component has any scored items
+            $details = $componentDetails[$component] ?? null;
+            $hasScores = false;
+            if ($details && isset($details['items'])) {
+                foreach ($details['items'] as $item) {
+                    if (($item['has_score'] ?? false) && $item['raw_score'] !== null) {
+                        $hasScores = true;
+                        break;
+                    }
+                }
+            }
+            
+            if ($hasScores) {
                 $weightedSum += $score * $weights[$component];
+                $totalWeight += $weights[$component];
             }
         }
-        return round($weightedSum, 2);
+        
+        // Normalize by total weight of completed components
+        if ($totalWeight > 0) {
+            return round($weightedSum / $totalWeight, 2);
+        }
+        
+        return 0;
     }
     
     // Calculate overall final grade
-    // Overall = (Final Period Grade × 0.6) + (Midterm Period Grade × 0.4)
-    public static function calculateOverallGrade($midtermGrade, $finalGrade) {
-        return round(($finalGrade * 0.6) + ($midtermGrade * 0.4), 0);
+    // If both midterm and final are complete: Overall = (Final × 0.6) + (Midterm × 0.4)
+    // If only one period complete: use that period's grade
+    public static function calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete = false, $finalComplete = false) {
+        if ($midtermComplete && $finalComplete) {
+            return round(($finalGrade * 0.6) + ($midtermGrade * 0.4), 0);
+        } elseif ($midtermComplete) {
+            return round($midtermGrade, 0);
+        } elseif ($finalComplete) {
+            return round($finalGrade, 0);
+        }
+        return 0;
     }
     
-    // Determine remarks
-    public static function getRemarks($gradePoint, $hasScores = true) {
+    // Determine remarks based on grade point and completeness
+    // DRP = Dropped student
+    // INC = Incomplete requirements
+    // Failed = Complete but below 75%
+    // Passed = Complete and 75% or above
+    public static function getRemarks($gradePoint, $isComplete = true, $isDropped = false) {
+        if ($isDropped) return 'DRP';
+        if (!$isComplete) return 'INC';
         if ($gradePoint == 5.00) return 'Failed';
-        if (!$hasScores) return 'INC';
         return 'Passed';
     }
     
@@ -128,14 +164,16 @@ class GradingHelper {
                 ];
             }
             
-            $rawScore = $row['raw_score'] !== null ? floatval($row['raw_score']) : 0;
+            $hasScore = $row['raw_score'] !== null;
+            $rawScore = $hasScore ? floatval($row['raw_score']) : 0;
             $maxScore = floatval($row['max_score']);
             
             $periodData[$period][$componentType]['items'][] = [
                 'item_id' => $row['id'],
                 'label' => $row['label'],
                 'raw_score' => $rawScore,
-                'max_score' => $maxScore
+                'max_score' => $maxScore,
+                'has_score' => $hasScore  // Track if score was explicitly set
             ];
             
             $periodData[$period][$componentType]['raw_total'] += $rawScore;
@@ -176,10 +214,24 @@ class GradingHelper {
             }
         }
 
-        // Calculate period grades
-        $midtermGrade = self::calculatePeriodGrade($componentScores['midterm'], $periodWeights['midterm']);
-        $finalGrade = self::calculatePeriodGrade($componentScores['final'], $periodWeights['final']);
-        $overallGrade = self::calculateOverallGrade($midtermGrade, $finalGrade);
+        // Get completeness for each period
+        $completeness = self::checkCompleteness($periodData, $perfectScores);
+        $overallCompleteness = self::getOverallCompleteness($completeness);
+        
+        // Check if student is dropped
+        $stmt = $db->prepare("SELECT status FROM student WHERE id = ?");
+        $stmt->bind_param("i", $studentId);
+        $stmt->execute();
+        $studentStatus = $stmt->get_result()->fetch_assoc();
+        $isDropped = ($studentStatus && $studentStatus['status'] === 'dropped');
+
+        // Calculate period grades using completeness
+        $midtermComplete = $overallCompleteness['midterm']['complete'];
+        $finalComplete = $overallCompleteness['final']['complete'];
+        
+        $midtermGrade = self::calculatePeriodGrade($componentScores['midterm'], $periodData['midterm'], $periodWeights['midterm']);
+        $finalGrade = self::calculatePeriodGrade($componentScores['final'], $periodData['final'], $periodWeights['final']);
+        $overallGrade = self::calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete, $finalComplete);
         
         // Get grade points
         $midtermGradePoint = self::getGradePointFromDB($db, $midtermGrade);
@@ -189,29 +241,106 @@ class GradingHelper {
         // Check if has scores
         $hasMidtermScores = array_sum($componentScores['midterm']) > 0;
         $hasFinalScores = array_sum($componentScores['final']) > 0;
-        
+
         return [
             'midterm' => [
                 'grade' => $midtermGrade,
                 'grade_point' => $midtermGradePoint,
-                'remarks' => self::getRemarks($midtermGradePoint, $hasMidtermScores),
+                'remarks' => self::getRemarks($midtermGradePoint, $midtermComplete, $isDropped),
                 'components' => $componentScores['midterm'],
-                'component_details' => $periodData['midterm']
+                'component_details' => $periodData['midterm'],
+                'complete' => $midtermComplete
             ],
             'final' => [
                 'grade' => $finalGrade,
                 'grade_point' => $finalGradePoint,
-                'remarks' => self::getRemarks($finalGradePoint, $hasFinalScores),
+                'remarks' => self::getRemarks($finalGradePoint, $finalComplete, $isDropped),
                 'components' => $componentScores['final'],
-                'component_details' => $periodData['final']
+                'component_details' => $periodData['final'],
+                'complete' => $finalComplete
             ],
             'overall' => [
                 'grade' => $overallGrade,
                 'grade_point' => $overallGradePoint,
-                'remarks' => self::getRemarks($overallGradePoint, $hasMidtermScores || $hasFinalScores)
+                'remarks' => self::getRemarks($overallGradePoint, $overallCompleteness['overall'], $isDropped),
+                'complete' => $overallCompleteness['overall']
             ],
-            'component_scores' => $componentScores
+            'component_scores' => $componentScores,
+            'completeness' => $completeness,
+            'is_dropped' => $isDropped
         ];
+    }
+    
+    // Check completeness of grades for each component
+    public static function checkCompleteness($periodData, $perfectScores) {
+        $completeness = ['midterm' => [], 'final' => []];
+        $requiredComponents = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
+        
+        foreach (['midterm', 'final'] as $period) {
+            foreach ($requiredComponents as $component) {
+                $data = $periodData[$period][$component] ?? null;
+                
+                if (!$data) {
+                    $completeness[$period][$component] = [
+                        'complete' => false,
+                        'missing_items' => ['No items configured'],
+                        'configured' => false
+                    ];
+                    continue;
+                }
+                
+                $items = $data['items'] ?? [];
+                $missingItems = [];
+                $hasAnyScore = false;
+                
+                foreach ($items as $item) {
+                    // Use has_score flag to determine if score was explicitly entered
+                    if (($item['has_score'] ?? false) && $item['raw_score'] !== null) {
+                        $hasAnyScore = true;
+                    } else {
+                        $missingItems[] = $item['label'] ?? 'Unnamed item';
+                    }
+                }
+                
+                $completeness[$period][$component] = [
+                    'complete' => count($missingItems) === 0 && count($items) > 0,
+                    'missing_items' => $missingItems,
+                    'configured' => count($items) > 0,
+                    'total_items' => count($items),
+                    'scored_items' => count($items) - count($missingItems),
+                    'has_any_score' => $hasAnyScore
+                ];
+            }
+        }
+        
+        return $completeness;
+    }
+    
+    // Get overall completeness summary for a student
+    public static function getOverallCompleteness($completeness) {
+        $summary = [
+            'midterm' => ['complete' => true, 'missing_components' => []],
+            'final' => ['complete' => true, 'missing_components' => []],
+            'overall' => true
+        ];
+        
+        foreach (['midterm', 'final'] as $period) {
+            foreach ($completeness[$period] as $component => $data) {
+                if ($data['configured'] && !$data['complete']) {
+                    $summary[$period]['complete'] = false;
+                    $summary[$period]['missing_components'][] = [
+                        'component' => $component,
+                        'missing_items' => $data['missing_items'],
+                        'scored' => $data['scored_items'],
+                        'total' => $data['total_items']
+                    ];
+                }
+            }
+        }
+        
+        $summary['overall'] = $summary['midterm']['complete'] && $summary['final']['complete'];
+        
+        return $summary;
     }
     
     // Map category name to component type

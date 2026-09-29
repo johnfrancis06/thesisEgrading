@@ -35,6 +35,11 @@
     --radius: 0.5rem;
     --radius-md: 0.75rem;
     --radius-lg: 1rem;
+    /* Grading table colors - customizable */
+    --grade-equiv-bg: #FFFF00;
+    --grade-equiv-text: #000;
+    --grade-weight-bg: #FF0000;
+    --grade-weight-text: #FFF;
 }
 
 /* --- Reset & Base --- */
@@ -147,7 +152,7 @@ small { color: var(--gray-500); }
 }
 
 .topbar {
-    background: var(--white);
+    background: transparent;
     border-bottom: 1px solid var(--gray-200);
     padding: 0.75rem 2rem;
     display: flex; align-items: center; justify-content: space-between;
@@ -393,6 +398,9 @@ small { color: var(--gray-500); }
     margin-left: auto !important;
     margin-right: 0 !important;
 }
+
+.modal-screen { display: none; }
+.modal-screen.active { display: block; }
 
 /* --- Grading Table --- */
 .grading-scroll-container {
@@ -890,6 +898,12 @@ small { color: var(--gray-500); }
     background: #bae6fd;
     color: #0369a1;
 }
+.status-mark.unmarked {
+    background: transparent;
+    color: #9ca3af;
+    border: 2px solid #e5e7eb;
+    font-size: 10px;
+}
 
 /* --- Legend --- */
 .legend-row td {
@@ -908,6 +922,7 @@ small { color: var(--gray-500); }
 .legend-item.absent { color: #b91c1c; }
 .legend-item.late { color: #92400e; }
 .legend-item.excused { color: #0369a1; }
+.legend-item.unmarked { color: #9ca3af; }
 
 /* --- Summary counts --- */
 #totalPresent, #totalAbsent {
@@ -959,6 +974,7 @@ small { color: var(--gray-500); }
 .status-menu-item.absent { color: #b91c1c; }
 .status-menu-item.late { color: #92400e; }
 .status-menu-item.excused { color: #0369a1; }
+.status-menu-item.unmarked { color: #9ca3af; }
 .status-menu-icon {
     display: inline-flex;
     align-items: center;
@@ -1134,15 +1150,15 @@ small { color: var(--gray-500); }
     max-width: 55px;
 }
 .grading-table-excel th.header-equiv {
-    background: #FFFF00 !important;
-    color: #000 !important;
+    background: var(--grade-equiv-bg) !important;
+    color: var(--grade-equiv-text) !important;
     font-weight: 700;
     min-width: 55px;
     max-width: 55px;
 }
 .grading-table-excel th.header-weight {
-    background: #FF0000 !important;
-    color: #FFF !important;
+    background: var(--grade-weight-bg) !important;
+    color: var(--grade-weight-text) !important;
     font-weight: 700;
     min-width: 55px;
     max-width: 55px;
@@ -1151,8 +1167,8 @@ small { color: var(--gray-500); }
     width: 42px;
     padding: 2px;
     border: 1px solid rgba(255, 255, 255, 0.75);
-    background: #FF0000;
-    color: #FFF;
+    background: var(--grade-weight-bg);
+    color: var(--grade-weight-text);
     text-align: center;
     font-weight: 700;
     box-sizing: border-box;
@@ -1256,16 +1272,16 @@ small { color: var(--gray-500); }
     max-width: 55px;
 }
 .grading-table-excel td.cell-equiv.cell-readonly {
-    background: #FFFF00 !important;
-    color: #000 !important;
+    background: var(--grade-equiv-bg) !important;
+    color: var(--grade-equiv-text) !important;
     font-weight: 700;
     padding: 4px 6px;
     min-width: 55px;
     max-width: 55px;
 }
 .grading-table-excel td.cell-weight.cell-readonly {
-    background: #FF0000 !important;
-    color: #FFF !important;
+    background: var(--grade-weight-bg) !important;
+    color: var(--grade-weight-text) !important;
     font-weight: 700;
     padding: 4px 6px;
     min-width: 55px;
@@ -1285,8 +1301,8 @@ small { color: var(--gray-500); }
     font-weight: 700;
     font-size: 13px;
     font-family: 'Calibri', 'Arial', sans-serif;
-    background: #FF0000;
-    color: #FFF;
+    background: var(--grade-weight-bg);
+    color: var(--grade-weight-text);
     box-sizing: border-box;
 }
 .grading-table-excel td.cell-weight .weight-input:focus {
@@ -1300,8 +1316,8 @@ small { color: var(--gray-500); }
 
 /* Summary columns */
 .grading-table-excel td.cell-midterm.cell-readonly {
-    background: #FFFF00 !important;
-    color: #000 !important;
+    background: var(--grade-equiv-bg) !important;
+    color: var(--grade-equiv-text) !important;
     font-weight: 700;
     padding: 4px 6px;
     min-width: 90px;
@@ -1538,7 +1554,7 @@ small { color: var(--gray-500); }
 
 /* --- Modern Topbar --- */
 .topbar-modern {
-    background: var(--white);
+    background: transparent;
     border-bottom: 1px solid var(--gray-200);
     padding: 0.875rem 2rem;
     display: flex;
@@ -2695,8 +2711,8 @@ body {
 }
 
 .btn-primary {
-    background: #ff7a59;
-    border-color: #ff7a59;
+    background: #0d6efd;
+    border-color: #0d6efd;
     color: #fff;
 }
 
@@ -2858,6 +2874,141 @@ body {
 .student-year-line {
     display: block;
     color: var(--gray-500);
-    font-size: 0.75rem;
-    line-height: 1.55;
+    font-size: 0.7rem;
+    line-height: 1.5;
+}
+
+/* Horizontal Navigation Styles */
+.horizontal-menu {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--border-light);
+    background-color: var(--bg-light);
+    margin: 0 -1.5rem 1.5rem -1.5rem;
+}
+
+.horizontal-menu .nav-link {
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--border-radius);
+    font-weight: 500;
+    font-size: 0.9rem;
+    transition: all 0.2s ease;
+}
+
+.horizontal-menu .nav-link:hover {
+    color: var(--primary);
+    background-color: var(--primary-light);
+}
+
+.horizontal-menu .nav-link.active {
+    color: var(--primary);
+    background-color: var(--primary-light);
+    font-weight: 600;
+}
+
+.horizontal-menu .nav-link i {
+    font-size: 1.1rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .horizontal-menu {
+        margin: 0 -1rem 1rem -1rem;
+        padding: 0.75rem 0;
+    }
+    
+    .horizontal-menu .nav-link {
+        padding: 0.4rem 0.6rem;
+        font-size: 0.85rem;
+    }
+    
+    .horizontal-menu .nav-link i {
+        font-size: 1rem;
+    }
+}
+/* Topbar Navigation Styles */
+.topbar-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+}
+
+.topbar-nav .nav-link {
+    display: flex;
+    align-items: center;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 0.3rem 0.5rem;
+    border-radius: var(--border-radius);
+    font-weight: 500;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+}
+
+.topbar-nav .nav-link:hover {
+    color: var(--primary);
+    background-color: var(--primary-light);
+}
+
+.topbar-nav .nav-link.active {
+    color: var(--primary);
+    background-color: #fff;
+    font-weight: 600;
+}
+
+.topbar-nav .nav-link i {
+    font-size: 1rem;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .topbar-nav {
+        gap: 0.5rem;
+    }
+    
+    .topbar-nav .nav-link {
+        padding: 0.2rem 0.4rem;
+        font-size: 0.75rem;
+    }
+    
+    .topbar-nav .nav-link i {
+        font-size: 0.9rem;
+    }
+}
+
+/* Attendance Config Modal - Day Badges */
+.day-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    transition: all 0.2s ease;
+}
+
+.day-badge.bg-primary {
+    background: var(--primary) !important;
+    color: white;
+}
+
+.day-badge.bg-secondary {
+    background: var(--gray-300) !important;
+    color: var(--gray-600);
+}
+
+.form-switch .form-check-input:checked + .form-check-label .day-badge {
+    background: var(--primary) !important;
+    color: white;
 }

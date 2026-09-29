@@ -8,7 +8,7 @@ define('DB_PORT', 3306);
 
 // App Config
 define('APP_NAME', 'E-Grading System');
-define('APP_URL', 'http://localhost');
+define('APP_URL', 'http://localhost/thesisEgrading/webapp');
 define('APP_ENV', 'development');
 
 class Database {

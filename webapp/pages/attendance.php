@@ -40,23 +40,41 @@ if ($classId > 0) {
     <?php include 'includes/header.php'; ?>
     
     <div class="main-content">
-        <div class="topbar">
+        <header class="topbar-modern">
             <div class="topbar-left">
-                <button class="mobile-toggle" id="mobileToggle">
+                <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle navigation">
                     <i class="bi bi-list"></i>
                 </button>
-                <h1 class="topbar-title"><?= $classId > 0 ? 'Attendance Sheet' : 'Select a Class' ?></h1>
+                <div class="page-title-block">
+                    <h1 class="page-title"><?= $classId > 0 ? 'Attendance Sheet' : 'Select a Class' ?></h1>
+                    <span class="page-subtitle"><?= $classId > 0 ? htmlspecialchars($class['course_program']) . ' Yr' . $class['year_level'] . '-' . htmlspecialchars($class['section']) . ' - ' . $class['academic_year'] : 'Choose a class to view attendance' ?></span>
+                </div>
             </div>
             <div class="topbar-right">
+                <nav class="topbar-nav">
+                    <a href="index.php?page=dashboard" class="nav-link <?= ($_GET['page'] ?? '') === 'dashboard' ? 'active' : '' ?>">
+                        <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                    </a>
+                    <a href="index.php?page=classes" class="nav-link <?= ($_GET['page'] ?? '') === 'classes' ? 'active' : '' ?>">
+                        <i class="bi bi-people me-1"></i> Classes
+                    </a>
+                </nav>
                 <?php if ($classId > 0): ?>
                 <button class="btn btn-secondary me-2" onclick="showAttendanceConfig()">
                     <i class="bi bi-gear"></i> Settings
                 </button>
                 <?php endif; ?>
+                <div class="user-menu">
+                    <div class="user-avatar"><?= strtoupper(substr($_SESSION['faculty_name'] ?? 'U', 0, 2)) ?></div>
+                    <div class="user-info d-none d-md-block">
+                        <span class="user-name"><?= htmlspecialchars($_SESSION['faculty_name'] ?? 'User') ?></span>
+                        <span class="user-role">Faculty</span>
+                    </div>
+                </div>
             </div>
-        </div>
+        </header>
         
-        <div class="content-area">
+        <main class="content-area-modern">
             <?php if ($classId > 0): ?>
             <div class="attendance-sheet fade-in">
                 <!-- Header -->
@@ -104,6 +122,9 @@ if ($classId > 0) {
                         </select>
                     </div>
                     <div class="controls-right">
+                        <button class="btn btn-sm btn-outline-danger" onclick="showAbsentChecker()">
+                            <i class="bi bi-exclamation-triangle"></i> Absent Checker
+                        </button>
                         <button class="btn btn-sm btn-outline-primary" onclick="showAttendanceConfig()">
                             <i class="bi bi-gear"></i> Settings
                         </button>
@@ -133,6 +154,7 @@ if ($classId > 0) {
                                     <span class="legend-item absent">A = Absent</span>
                                     <span class="legend-item late">L = Late</span>
                                     <span class="legend-item excused">E = Excused</span>
+                                    <span class="legend-item unmarked">– = Unmarked</span>
                                 </td>
                             </tr>
                         </tfoot>
@@ -171,7 +193,7 @@ if ($classId > 0) {
                 <?php endforeach; ?>
             </div>
             <?php endif; ?>
-        </div>
+        </main>
     </div>
     
     <div id="configModalWrapper"></div>

@@ -351,7 +351,7 @@ try {
             }
             
             echo ResponseAPI::success(['results' => $results, 'total_added' => $totalAdded, 'total_skipped' => $totalSkipped], $message);
-        } catch (Exception $e) {
+        } catch (\Exception | \Error $e) {
             $db->rollback();
             echo ResponseAPI::error("Enrollment failed: " . $e->getMessage());
         }
@@ -706,7 +706,7 @@ try {
             }
             ob_clean();
             echo ResponseAPI::success($result->fetch_all(MYSQLI_ASSOC));
-        } catch (Exception $e) {
+        } catch (\Exception | \Error $e) {
             ob_clean();
             echo ResponseAPI::error("Failed to load subjects: " . $e->getMessage(), 500);
         }
@@ -807,7 +807,7 @@ try {
                 $sessionId = $db->insert_id;
                 $students = $db->query("SELECT id FROM student WHERE class_section_id = $classId")->fetch_all(MYSQLI_ASSOC);
                 foreach ($students as $s) {
-                    $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, 'absent')");
+                    $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
                     $stmt2->bind_param("ii", $sessionId, $s['id']);
                     $stmt2->execute();
                 }
@@ -846,7 +846,7 @@ try {
             $sessionId = $db->insert_id;
             $students = $db->query("SELECT id FROM student WHERE class_section_id = {$data['class_id']}")->fetch_all(MYSQLI_ASSOC);
             foreach ($students as $s) {
-                $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, 'absent')");
+                $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
                 $stmt2->bind_param("ii", $sessionId, $s['id']);
                 $stmt2->execute();
             }
@@ -858,7 +858,7 @@ try {
     elseif ($action === 'save_attendance') {
         $data = json_decode(file_get_contents("php://input"), true);
         $recordId = intval($data['record_id'] ?? 0);
-        $status = $data['status'] ?? 'absent';
+        $status = $data['status'] ?? '';
         $remarks = $data['remarks'] ?? '';
         $sessionId = intval($data['session_id'] ?? 0);
         $studentId = intval($data['student_id'] ?? 0);
@@ -1421,7 +1421,7 @@ try {
     else {
         echo ResponseAPI::error("Invalid action", 404);
     }
-} catch (Exception $e) {
+} catch (\Exception | \Error $e) {
     ob_clean();
     echo ResponseAPI::error($e->getMessage(), 500);
 }
@@ -1494,7 +1494,7 @@ function generateAttendanceCSV($class, $students, $sessions) {
         foreach ($sessions as $session) {
             $record = $db->query("SELECT status FROM attendance_record 
                 WHERE attendance_session_id = {$session['id']} AND student_id = {$student['id']}")->fetch_assoc();
-            $status = $record ? $record['status'] : 'absent';
+            $status = $record ? $record['status'] : '';
             $row[] = ucfirst($status);
             
             if ($status === 'present') $present++;

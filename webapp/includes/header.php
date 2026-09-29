@@ -8,24 +8,13 @@ $initials = strtoupper(substr($facultyName, 0, 2));
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
-        <div class="sidebar-brand-icon">EG</div>
-        <div class="sidebar-brand-text">E-Grading</div>
+        <a href="index.php?page=dashboard" style="display: flex; align-items: center; gap: 0.75rem; color: var(--white); text-decoration: none;">
+            <div class="sidebar-brand-icon">EG</div>
+            <div class="sidebar-brand-text">E-Grading</div>
+        </a>
     </div>
     
     <nav class="sidebar-nav">
-        <div class="sidebar-section">Main Menu</div>
-        <a href="index.php?page=dashboard" class="sidebar-link <?= $currentPage === 'dashboard' ? 'active' : '' ?>">
-            <i class="bi bi-speedometer2"></i> Dashboard
-        </a>
-        <a href="index.php?page=classes" class="sidebar-link <?= $currentPage === 'classes' ? 'active' : '' ?>">
-            <i class="bi bi-people"></i> Classes
-        </a>
-        <a href="index.php?page=subjects" class="sidebar-link <?= $currentPage === 'subjects' ? 'active' : '' ?>">
-            <i class="bi bi-book"></i> Subjects
-        </a>
-        <a href="index.php?page=section-enrollment" class="sidebar-link <?= $currentPage === 'section-enrollment' ? 'active' : '' ?>">
-            <i class="bi bi-person-plus"></i> Enroll Students
-        </a>
         
         <div class="sidebar-section">Activities</div>
         <a href="index.php?page=grading" class="sidebar-link <?= $currentPage === 'grading' ? 'active' : '' ?>">

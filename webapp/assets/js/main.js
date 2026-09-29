@@ -17,81 +17,6 @@ const API = {
     }
 };
 
-// Modal helper functions will be added after loadClasses
-
-async function checkAndViewStudents(classId) {
-    try {
-        const resp = await fetch(`api/index.php?action=check_class_students&class_id=${classId}`);
-        const data = await resp.json();
-        
-        if (data.success && data.data && data.data.has_students) {
-            window.location.href = `index.php?page=students`;
-        } else {
-            document.getElementById('noStudentsModal').dataset.classId = classId;
-            const modal = document.getElementById('noStudentsModal');
-            modal.dataset.classYearLevel = data.data.class_year_level || '';
-            modal.dataset.classSection = data.data.class_section || '';
-            modal.dataset.classProgram = data.data.class_program || '';
-
-            // Update class year label
-            const yearLabel = document.getElementById('classYearLabel');
-            if (yearLabel && data.data.class_year_level) {
-                yearLabel.textContent = data.data.class_year_level + ' Year';
-            }
-
-            new bootstrap.Modal(modal).show();
-            loadEnrolledSectionsForModal();
-        }
-    } catch (e) {
-        alert('Error checking students: ' + e.message);
-    }
-}
-
-async function loadEnrolledSectionsForModal() {
-    const resp = await fetch('api/index.php?action=get_enrolled_sections');
-    const data = await resp.json();
-    
-    if (data.success && data.data.length > 0) {
-        const sectionSelect = document.getElementById('modalSectionSelect');
-        const modal = document.getElementById('noStudentsModal');
-        const classYearLevel = parseInt(modal.dataset.classYearLevel);
-        
-        sectionSelect.innerHTML = '<option value="">Select Section</option>';
-        
-        // Filter sections by class year level only
-        if (classYearLevel) {
-            window.modalSections = data.data.filter(s => s.year_level == classYearLevel);
-        } else {
-            window.modalSections = data.data;
-        }
-        
-        updateModalSections();
-    }
-}
-
-function updateModalSections() {
-    const sectionSelect = document.getElementById('modalSectionSelect');
-    
-    sectionSelect.innerHTML = '<option value="">Select Section</option>';
-    
-    if (!window.modalSections || window.modalSections.length === 0) {
-        const option = document.createElement('option');
-        option.value = "";
-        option.textContent = 'No sections available';
-        option.disabled = true;
-        sectionSelect.appendChild(option);
-        return;
-    }
-    
-    const sections = [...new Set(window.modalSections.map(s => s.section))];
-    sections.sort().forEach(section => {
-        const option = document.createElement('option');
-        option.value = section;
-        option.textContent = 'Section ' + section;
-        sectionSelect.appendChild(option);
-    });
-}
-
 // Classes Management
 async function loadClasses() {
     const data = await API.call('get_classes');
@@ -107,9 +32,9 @@ async function loadClasses() {
                 <a href="index.php?page=grading&id=${cls.id}" class="btn btn-sm btn-primary">
                     <i class="bi bi-pencil"></i> Grade
                 </a>
-                <button onclick="checkAndViewStudents(${cls.id})" class="btn btn-sm btn-info">
+                <a href="index.php?page=students&id=${cls.id}" class="btn btn-sm btn-info">
                     <i class="bi bi-people"></i> Students
-                </button>
+                </a>
                 <a href="index.php?page=attendance&id=${cls.id}" class="btn btn-sm btn-warning">
                     <i class="bi bi-calendar"></i> Attend
                 </a>
@@ -127,30 +52,86 @@ async function loadClasses() {
 }
 
 async function saveClass() {
+    const courseProgram = document.getElementById('courseProgram').value.trim();
+    const yearLevelEl = document.getElementById('yearLevel');
+    const yearLevel = parseInt(yearLevelEl.value);
+    const section = document.getElementById('section').value.trim();
+    const semester = parseInt(document.getElementById('semester').value);
+    const academicYear = document.getElementById('academicYear').value.trim();
+
+    if (!courseProgram || !yearLevel || !section || !academicYear) {
+        alert('Please fill in all required class fields');
+        return;
+    }
+
+    let subjectId = parseInt(document.getElementById('subjectSelect').value);
+    const subjectMode = document.querySelector('input[name="subjectMode"]:checked')?.value || 'select';
+
+    if (subjectMode === 'create') {
+        const code = document.getElementById('newSubjectCode').value.trim();
+        const title = document.getElementById('newSubjectTitle').value.trim();
+        const units = parseInt(document.getElementById('newSubjectUnits').value);
+        if (!code || !title) {
+            alert('Please fill in Subject Code and Title');
+            return;
+        }
+        try {
+            const resp = await API.call('create_subject', 'POST', { code, title, default_units: units });
+            if (!resp.success) {
+                alert('Error creating subject: ' + (resp.message || 'Failed'));
+                return;
+            }
+            subjectId = resp.data.id;
+        } catch (e) {
+            alert('Error creating subject: ' + e.message);
+            return;
+        }
+    }
+
+    if (!subjectId) {
+        alert('Please select or create a subject');
+        return;
+    }
+
+    // Collect inline student entries
+    const inlineStudents = [];
+    document.querySelectorAll('#inlineStudentsContainer .row').forEach(function(row) {
+        const studentNo = row.querySelector('[name="inlineStudentNo"]').value.trim();
+        const lastName = row.querySelector('[name="inlineLastName"]').value.trim();
+        const firstName = row.querySelector('[name="inlineFirstName"]').value.trim();
+        const middleInitial = row.querySelector('[name="inlineMiddleInitial"]').value.trim();
+        if (studentNo || lastName || firstName) {
+            inlineStudents.push({
+                student_no: studentNo, last_name: lastName, first_name: firstName, middle_initial: middleInitial
+            });
+        }
+    });
+
     const data = {
-        subject_id: parseInt(document.getElementById('subjectSelect').value),
-        course_program: document.getElementById('courseProgram').value,
-        year_level: parseInt(document.getElementById('yearLevel').value),
-        section: document.getElementById('section').value,
-        semester: parseInt(document.getElementById('semester').value),
-        academic_year: document.getElementById('academicYear').value
+        subject_id: subjectId,
+        course_program: courseProgram,
+        year_level: yearLevel,
+        section: section,
+        semester: semester,
+        academic_year: academicYear,
+        students: inlineStudents
     };
-    
-    // Always use auto-enrollment - students come from section enrollment
+
     const resp = await API.call('create_class_with_students', 'POST', data);
     if (resp.success) {
         alert(resp.message || 'Class created successfully!');
         bootstrap.Modal.getInstance(document.getElementById('newClassModal')).hide();
         loadClasses();
         loadSubjects();
+    } else {
+        alert('Error creating class: ' + (resp.message || 'Unknown error'));
     }
 }
 
 // Subjects Management
 async function loadSubjects() {
     try {
-        const resp = await fetch('api/index.php?action=get_subjects&t=' + Date.now() + '');
-        const data = await resp.json();
+        const data = await API.call('get_subjects');
         if (!data.success) return;
         
         const select = document.getElementById('subjectSelect');
@@ -219,6 +200,17 @@ async function saveSubject() {
     } catch (e) {
         alert('Error: ' + e.message);
     }
+}
+
+function cancelEditSubject() {
+    document.getElementById('subjectId').value = '';
+    document.getElementById('subjectCode').value = '';
+    document.getElementById('subjectTitle').value = '';
+    document.getElementById('defaultUnits').value = '3';
+    document.getElementById('subjectModalTitle').textContent = 'Add New Subject';
+    document.getElementById('saveSubjectBtn').textContent = 'Add Subject';
+    const cancelGroup = document.getElementById('cancelEditGroup');
+    if (cancelGroup) cancelGroup.style.display = 'none';
 }
 
 // Delete Subject

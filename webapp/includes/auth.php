@@ -55,6 +55,15 @@ class Auth {
     
     public function requireLogin() {
         if (!$this->isLoggedIn()) {
+            // Check if this is an API request (expects JSON)
+            $isApi = (strpos($_SERVER['REQUEST_URI'] ?? '', '/api/') !== false) ||
+                     (isset($_GET['action']) && $_GET['action'] !== '');
+            if ($isApi) {
+                header('Content-Type: application/json');
+                http_response_code(401);
+                echo json_encode(['success' => false, 'message' => 'Unauthorized: Please log in']);
+                exit;
+            }
             header("Location: " . APP_URL . "/index.php?page=login");
             exit;
         }

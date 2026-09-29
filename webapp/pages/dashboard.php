@@ -61,7 +61,6 @@ $attOverview = $db->query("SELECT
     <?php include 'includes/header.php'; ?>
     
     <div class="main-content">
-        <!-- Modern Topbar -->
         <header class="topbar-modern">
             <div class="topbar-left">
                 <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle navigation">
@@ -73,6 +72,14 @@ $attOverview = $db->query("SELECT
                 </div>
             </div>
             <div class="topbar-right">
+                <nav class="topbar-nav">
+                    <a href="index.php?page=dashboard" class="nav-link <?= ($_GET['page'] ?? '') === 'dashboard' ? 'active' : '' ?>">
+                        <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                    </a>
+                    <a href="index.php?page=classes" class="nav-link <?= ($_GET['page'] ?? '') === 'classes' ? 'active' : '' ?>">
+                        <i class="bi bi-people me-1"></i> Classes
+                    </a>
+                </nav>
                 <div class="user-menu">
                     <div class="user-avatar"><?= strtoupper(substr($_SESSION['faculty_name'] ?? 'U', 0, 2)) ?></div>
                     <div class="user-info d-none d-md-block">
@@ -82,6 +89,8 @@ $attOverview = $db->query("SELECT
                 </div>
             </div>
         </header>
+        
+
         
         <main class="content-area-modern">
             <section class="dashboard-brief" aria-label="Dashboard overview">

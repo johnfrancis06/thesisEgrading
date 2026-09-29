@@ -27,16 +27,36 @@ if ($classId <= 0) {
     <?php include 'includes/header.php'; ?>
     
     <div class="main-content">
-        <div class="topbar">
+        <header class="topbar-modern">
             <div class="topbar-left">
-                <button class="mobile-toggle" id="mobileToggle">
+                <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle navigation">
                     <i class="bi bi-list"></i>
                 </button>
-                <h1 class="topbar-title"><?= $classId <= 0 ? 'Reports' : 'Reports' ?></h1>
+                <div class="page-title-block">
+                    <h1 class="page-title">Reports</h1>
+                    <span class="page-subtitle"><?= $classId <= 0 ? 'Generate reports for your classes' : 'View and export class reports' ?></span>
+                </div>
             </div>
-        </div>
+            <div class="topbar-right">
+                <nav class="topbar-nav">
+                    <a href="index.php?page=dashboard" class="nav-link <?= ($_GET['page'] ?? '') === 'dashboard' ? 'active' : '' ?>">
+                        <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                    </a>
+                    <a href="index.php?page=classes" class="nav-link <?= ($_GET['page'] ?? '') === 'classes' ? 'active' : '' ?>">
+                        <i class="bi bi-people me-1"></i> Classes
+                    </a>
+                </nav>
+                <div class="user-menu">
+                    <div class="user-avatar"><?= strtoupper(substr($_SESSION['faculty_name'] ?? 'U', 0, 2)) ?></div>
+                    <div class="user-info d-none d-md-block">
+                        <span class="user-name"><?= htmlspecialchars($_SESSION['faculty_name'] ?? 'User') ?></span>
+                        <span class="user-role">Faculty</span>
+                    </div>
+                </div>
+            </div>
+        </header>
         
-        <div class="content-area">
+        <main class="content-area-modern">
             <?php if ($classId <= 0): ?>
                 <div class="page-header fade-in">
                     <div class="page-header-left">
@@ -91,6 +111,11 @@ if ($classId <= 0) {
                             <p class="text-muted mb-0"><?= htmlspecialchars($class['course_program']) ?> Yr<?= $class['year_level'] ?>-<?= $class['section'] ?> - <?= $class['academic_year'] ?></p>
                         </div>
                     </div>
+                    <div class="page-header-right d-none d-md-flex align-items-center justify-content-end">
+                        <div class="logo-box" id="reportHeaderLogo" style="width: 140px; height: 120px; background: #f8f9fa; border: 1px dashed #dee2e6; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+                            <i class="bi bi-image text-muted" style="font-size: 2rem;"></i>
+                        </div>
+                    </div>
                 </div>
                 
                 <!-- GE-104 Report Types -->
@@ -108,13 +133,19 @@ if ($classId <= 0) {
                                 <h5 class="mb-2">Grading Sheet</h5>
                                 <p class="text-muted mb-4">Condensed roster: Midterm/Final ratings, Grade Point, Unit Credit</p>
                                 <div class="d-flex flex-column gap-2">
-                                    <button class="btn btn-danger" onclick="exportReport('grading_sheet', <?= $classId ?>, 'pdf')">
+                                    <button class="btn btn-outline-primary" onclick="saveGradingSheetTemplate(<?= $classId ?>)">
+                                        <i class="bi bi-save me-1"></i> Save Template
+                                    </button>
+                                    <button class="btn btn-danger" onclick="exportGradingSheetTemplate(<?= $classId ?>, 'pdf')" disabled data-export-format="pdf">
                                         <i class="bi bi-file-earmark-pdf me-1"></i> Export PDF
                                     </button>
-                                    <button class="btn btn-success" onclick="exportReport('grading_sheet', <?= $classId ?>, 'xlsx')">
+                                    <button class="btn btn-success" onclick="exportGradingSheetTemplate(<?= $classId ?>, 'csv')" disabled data-export-format="csv">
+                                        <i class="bi bi-file-earmark-excel me-1"></i> Export CSV
+                                    </button>
+                                    <button class="btn btn-success" onclick="exportGradingSheetTemplate(<?= $classId ?>, 'xlsx')" disabled data-export-format="xlsx">
                                         <i class="bi bi-file-earmark-excel me-1"></i> Export Excel
                                     </button>
-                                    <button class="btn btn-primary" onclick="exportReport('grading_sheet', <?= $classId ?>, 'doc')">
+                                    <button class="btn btn-primary" onclick="exportGradingSheetTemplate(<?= $classId ?>, 'doc')" disabled data-export-format="doc">
                                         <i class="bi bi-file-earmark-word me-1"></i> Export Word
                                     </button>
                                 </div>
@@ -179,7 +210,7 @@ if ($classId <= 0) {
                     </div>
                 </div>
             <?php endif; ?>
-        </div>
+        </main>
     </div>
 
     <div class="modal fade" id="logoEditorModal" tabindex="-1" aria-hidden="true">
@@ -223,6 +254,96 @@ if ($classId <= 0) {
             window.open(`api/index.php?action=generate_${type}_report&class_id=${classId}&format=${format}`);
         }
         
+        // New template-based export
+        function saveGradingSheetTemplate(classId) {
+            const previewDiv = document.getElementById('classRecordPreview');
+            const pages = previewDiv.querySelectorAll('.page');
+            
+            if (pages.length === 0) {
+                alert('Please load the Grading Sheet preview first.');
+                return;
+            }
+            
+            // Extract data from preview
+            const firstPage = pages[0];
+            const headerImg = firstPage.querySelector('.header-image');
+            const footerImg = firstPage.querySelector('.footer-image');
+            
+            const courseNumber = firstPage.querySelector('.course-info-left span:nth-child(1)')?.textContent?.replace('Course Number:', '')?.trim() || '';
+            const courseTitle = firstPage.querySelector('.course-info-left span:nth-child(2)')?.textContent?.replace('Course Title:', '')?.trim() || '';
+            const semesterAY = firstPage.querySelector('.course-info-right span:nth-child(1)')?.textContent?.trim() || '';
+            const courseYear = firstPage.querySelector('.course-info-right span:nth-child(2)')?.textContent?.replace('Course and Year:', '')?.trim() || '';
+            
+            const academicYear = semesterAY.match(/AY\s+([\d-]+)/)?.[1] || '';
+            const semester = semesterAY.match(/(\d+)(?:st|nd|rd|th)\s+Semester/)?.[1] || '1';
+            
+            const templateData = {
+                academic_year: academicYear,
+                semester: semester,
+                course_number: courseNumber,
+                course_title: courseTitle,
+                course_year_section: courseYear,
+                students_per_page: 20,
+                page_size: 'A4',
+                margin_top: 15,
+                margin_bottom: 15,
+                margin_left: 15,
+                margin_right: 15
+            };
+            
+            fetch(`api/index.php?action=save_grading_sheet_template&class_id=${classId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(templateData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Grading sheet template saved successfully!');
+                    // Enable export buttons
+                    document.querySelectorAll('[data-export-format]').forEach(btn => btn.disabled = false);
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(err => {
+                alert('Error: ' + err.message);
+            });
+        }
+        
+        function exportGradingSheetTemplate(classId, format) {
+            const btn = event.target.closest('button');
+            if (btn) btn.disabled = true;
+            
+            fetch(`api/index.php?action=export_grading_sheet&class_id=${classId}&format=${format}`, {
+                method: 'GET'
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.blob();
+                }
+                return response.json().then(err => { throw new Error(err.message || 'Export failed'); });
+            })
+            .then(blob => {
+                if (blob) {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `GradingSheet_${classId}_${format}.${format === 'xlsx' ? 'xls' : format}`;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    document.body.removeChild(a);
+                }
+            })
+            .catch(err => {
+                alert('Export failed: ' + err.message);
+            })
+            .finally(() => {
+                if (btn) btn.disabled = false;
+            });
+        }
+        
         function previewReport(type, classId) {
             const previewDiv = document.getElementById('classRecordPreview');
             previewDiv.innerHTML = '<div class="text-center py-4"><div class="spinner-border text-primary"></div><p class="mt-2">Loading preview...</p></div>';
@@ -231,6 +352,7 @@ if ($classId <= 0) {
                 .then(response => response.text())
                 .then(html => {
                     previewDiv.innerHTML = html;
+                    initReportPagination();
                     enableReportControls();
                     restoreReportDraft(classId);
                     applySavedLogo();
@@ -238,6 +360,41 @@ if ($classId <= 0) {
                 .catch(err => {
                     previewDiv.innerHTML = '<div class="text-center py-4 text-danger">Error loading preview: ' + err.message + '</div>';
                 });
+        }
+
+        function initReportPagination() {
+            const previewDiv = document.getElementById('classRecordPreview');
+            const pages = previewDiv.querySelectorAll('.page');
+            
+            if (pages.length <= 1) return;
+            
+            // Create pagination tabs
+            let tabsHtml = '<div class="report-pagination mb-3"><ul class="nav nav-tabs" role="tablist">';
+            pages.forEach((page, idx) => {
+                tabsHtml += `<li class="nav-item" role="presentation">
+                    <button class="nav-link ${idx === 0 ? 'active' : ''}" 
+                            data-bs-toggle="tab" 
+                            data-bs-target="#reportPage${idx}" 
+                            role="tab" 
+                            type="button">
+                        Page ${idx + 1}
+                    </button>
+                </li>`;
+            });
+            tabsHtml += '</ul></div>';
+            
+            // Wrap pages in tab panes
+            let tabContentHtml = '<div class="tab-content">';
+            pages.forEach((page, idx) => {
+                tabContentHtml += `<div class="tab-pane fade ${idx === 0 ? 'show active' : ''}" 
+                    id="reportPage${idx}" role="tabpanel">${page.outerHTML}</div>`;
+            });
+            tabContentHtml += '</div>';
+            
+            // Replace pages with tabbed version
+            const firstPage = pages[0];
+            firstPage.insertAdjacentHTML('beforebegin', tabsHtml + tabContentHtml);
+            pages.forEach(p => p.remove());
         }
 
         function getReportPreviewTable() {
@@ -356,14 +513,19 @@ if ($classId <= 0) {
 
         function setReportLogo(logoData) {
             const logoBox = document.querySelector('#classRecordPreview .logo-box');
-            if (!logoBox) return;
-            logoBox.innerHTML = `<img src="${logoData}" alt="University logo">`;
+            const headerLogoBox = document.getElementById('reportHeaderLogo');
+            if (!logoBox && !headerLogoBox) return;
+            if (logoBox) logoBox.innerHTML = `<img src="${logoData}" alt="University logo" style="max-width:100%; max-height:100%; object-fit:contain;">`;
+            if (headerLogoBox) headerLogoBox.innerHTML = `<img src="${logoData}" alt="University logo" style="max-width:100%; max-height:100%; object-fit:contain;">`;
         }
 
         function applySavedLogo() {
             const logoData = localStorage.getItem('grading-report-logo-<?= $classId ?>');
             if (logoData) setReportLogo(logoData);
         }
+        
+        // Apply logo on page load
+        applySavedLogo();
         
         function exportAttendance(classId, format) {
             window.open(`api/index.php?action=export_attendance&class_id=${classId}&format=${format}`);

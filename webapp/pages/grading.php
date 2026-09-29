@@ -24,40 +24,55 @@ if ($classId > 0) {
     <title><?= $classId > 0 ? 'Grading Sheet - ' . APP_NAME : 'Select a Class - ' . APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=8">
+    <link rel="stylesheet" href="assets/css/style.css?v=9">
 </head>
 <body>
     <?php include 'includes/header.php'; ?>
     
     <div class="main-content">
-        <div class="topbar">
+        <header class="topbar-modern">
             <div class="topbar-left">
-                <button class="mobile-toggle" id="mobileToggle">
+                <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle navigation">
                     <i class="bi bi-list"></i>
                 </button>
-                <h1 class="topbar-title"><?= $classId > 0 ? 'Grading Sheet' : 'Select a Class' ?></h1>
+                <div class="page-title-block">
+                    <h1 class="page-title"><?= $classId > 0 ? 'Grading Sheet' : 'Select a Class' ?></h1>
+                    <span class="page-subtitle"><?= $classId > 0 ? htmlspecialchars($class['code']) . ' - ' . htmlspecialchars($class['course_program']) . ' Yr' . $class['year_level'] . '-' . htmlspecialchars($class['section']) . ' - ' . $class['academic_year'] : 'Choose a class to view grading sheet' ?></span>
+                </div>
             </div>
             <div class="topbar-right">
+                <nav class="topbar-nav">
+                    <a href="index.php?page=dashboard" class="nav-link <?= ($_GET['page'] ?? '') === 'dashboard' ? 'active' : '' ?>">
+                        <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                    </a>
+                    <a href="index.php?page=classes" class="nav-link <?= ($_GET['page'] ?? '') === 'classes' ? 'active' : '' ?>">
+                        <i class="bi bi-people me-1"></i> Classes
+                    </a>
+                </nav>
                 <?php if ($classId > 0): ?>
                 <div class="d-flex align-items-center gap-2">
                     <button class="btn btn-outline-secondary btn-sm" onclick="showCategoryManager()">
                         <i class="bi bi-gear me-1"></i> Manage Categories
                     </button>
-                    <span class="badge bg-secondary period-badge" data-period="midterm">
-                        Midterm (40%)
-                    </span>
-                    <span class="badge bg-primary period-badge" data-period="final">
-                        Final (60%)
-                    </span>
+                    <button class="btn btn-outline-info btn-sm" onclick="showColorSettings()">
+                        <i class="bi bi-palette me-1"></i> Table Colors
+                    </button>
                     <a href="index.php?page=reports&id=<?= $classId ?>" class="btn btn-secondary">
                         <i class="bi bi-file-earmark-arrow-down"></i> Reports
                     </a>
                 </div>
                 <?php endif; ?>
+                <div class="user-menu">
+                    <div class="user-avatar"><?= strtoupper(substr($_SESSION['faculty_name'] ?? 'U', 0, 2)) ?></div>
+                    <div class="user-info d-none d-md-block">
+                        <span class="user-name"><?= htmlspecialchars($_SESSION['faculty_name'] ?? 'User') ?></span>
+                        <span class="user-role">Faculty</span>
+                    </div>
+                </div>
             </div>
-        </div>
+        </header>
         
-        <div class="content-area">
+        <main class="content-area-modern">
             <?php if ($classId > 0): ?>
             <div class="page-header fade-in">
                 <div class="page-header-left">
@@ -68,22 +83,6 @@ if ($classId > 0) {
                         <h1 class="mb-0"><?= htmlspecialchars($class['code']) ?></h1>
                         <p class="text-muted mb-0"><?= htmlspecialchars($class['course_program']) ?> Yr<?= $class['year_level'] ?>-<?= $class['section'] ?> - <?= $class['academic_year'] ?></p>
                     </div>
-                </div>
-            </div>
-            
-            <!-- Category Setup -->
-            <div class="card border-info mb-3 fade-in perfect-score-category" id="perfectScoreCategory">
-                <div class="card-header bg-info text-white d-flex justify-content-between align-items-center category-header" onclick="togglePerfectScoreCategory()" style="cursor: pointer;">
-                    <h5 class="mb-0"><i class="bi bi-collection me-2"></i>Grade Categories - <?= ucfirst($period) ?></h5>
-                    <div class="d-flex align-items-center gap-2">
-                        <i class="bi bi-chevron-down" id="perfectScoreChevron" style="font-size: 1.2rem; transition: transform 0.3s ease;"></i>
-                        <button class="btn btn-sm btn-light" onclick="event.stopPropagation(); showCategoryManager()">
-                            <i class="bi bi-pencil-square"></i> Add / Edit / Delete
-                        </button>
-                    </div>
-                </div>
-                <div class="card-body category-body" id="perfectScoreBody">
-                    <p class="text-muted mb-0">Add, edit, or delete grading categories and their items. Category weights and perfect scores are managed together.</p>
                 </div>
             </div>
             
@@ -104,6 +103,11 @@ if ($classId > 0) {
                     <span class="badge bg-info weight-editable" data-period="final" data-weight="<?= round($class['final_weight'] * 100) ?>" style="cursor: pointer; font-size: 0.85rem;" title="Click to edit weight">
                         <?= round($class['final_weight'] * 100) ?>% <i class="bi bi-pencil-square ms-1"></i>
                     </span>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link <?= $period === 'total' ? 'active' : '' ?>" href="index.php?page=grading&id=<?= $classId ?>&period=total">
+                        Total Grade
+                    </a>
                 </li>
             </ul>
             
@@ -154,8 +158,8 @@ if ($classId > 0) {
                 <?php endforeach; ?>
             </div>
             <?php endif; ?>
-        </div>
-</div>
+        </main>
+    </div>
      
      <!-- Category Manager Modal -->
     <div class="modal fade" id="legacyCategoryManagerModal" tabindex="-1" aria-hidden="true">
@@ -313,56 +317,19 @@ if ($classId > 0) {
                           <!-- Categories will be loaded here -->
                       </div>
                   </div>
-                  <div class="modal-footer">
-                      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                      <button type="button" class="btn btn-primary" onclick="saveCategoryConfig()">Save Configuration</button>
-                  </div>
-              </div>
-          </div>
-      </div>
+<div class="modal-footer">
+                       <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                       <button type="button" class="btn btn-primary" onclick="saveCategoryConfig()">Save Configuration</button>
+                   </div>
+               </div>
+</div>
+    </div>
 
-      <!-- Perfect Score Modal -->
-     <div class="modal fade" id="perfectScoreModal" tabindex="-1">
-         <div class="modal-dialog">
-             <div class="modal-content">
-                 <div class="modal-header">
-                     <h5 class="modal-title">Edit Perfect Scores - <span id="modalPeriodLabel"><?= ucfirst($period) ?></span></h5>
-                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                 </div>
-                 <div class="modal-body">
-                     <form id="perfectScoreForm">
-                         <input type="hidden" id="perfectScoreClassId" value="<?= $classId ?>">
-                         <input type="hidden" id="perfectScorePeriod" value="<?= $period ?>">
-                         <div class="row g-3">
-                             <div class="col-md-6">
-                                 <label class="form-label">Class Participation <small class="text-muted">(4 items for final, 2 for midterm)</small></label>
-                                 <input type="number" class="form-control" id="ps_class_participation" min="1" step="1" placeholder="e.g., 100" required>
-                             </div>
-                             <div class="col-md-6">
-                                 <label class="form-label">Problem Set</label>
-                                 <input type="number" class="form-control" id="ps_problem_set" min="1" step="1" placeholder="e.g., 50" required>
-                             </div>
-                             <div class="col-md-6">
-                                 <label class="form-label">Quizzes <small class="text-muted">(2 items)</small></label>
-                                 <input type="number" class="form-control" id="ps_quizzes" min="1" step="1" placeholder="e.g., 50" required>
-                             </div>
-                             <div class="col-md-6">
-                                 <label class="form-label">Periodical Exam</label>
-                                 <input type="number" class="form-control" id="ps_periodical_exam" min="1" step="1" placeholder="e.g., 100" required>
-                             </div>
-                         </div>
-                     </form>
-                 </div>
-                 <div class="modal-footer">
-                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                     <button type="button" class="btn btn-primary" onclick="savePerfectScores()">Save Perfect Scores</button>
-                 </div>
-             </div>
-         </div>
-     </div>
+    <div id="configModalWrapper"></div>
+    <div id="statusMenu" class="status-menu"></div>
 
     <script src="assets/vendor/bootstrap.bundle.min.js"></script>
-     <script src="assets/js/grading.js"></script>
+     <script src="assets/js/grading.js?v=2"></script>
     <?php if ($classId > 0): ?>
     <script>
         document.getElementById('mobileToggle')?.addEventListener('click', function() {
@@ -372,14 +339,17 @@ if ($classId > 0) {
         
         const classId = <?= $classId ?>;
         const period = '<?= $period ?>';
-        loadGradingSheet(classId, period);
-        loadPerfectScores(classId, period);
+        
+        if (period === 'total') {
+            loadTotalGrades(classId);
+        } else {
+            loadGradingSheet(classId, period);
+        }
         
         document.querySelectorAll('#periodTabs a').forEach(link => {
             link.addEventListener('click', function(e) {
                 const newPeriod = this.getAttribute('href').includes('period=') ? 
                     this.getAttribute('href').split('period=')[1] : 'midterm';
-                loadPerfectScores(classId, newPeriod);
             });
         });
 
@@ -739,6 +709,139 @@ if ($classId > 0) {
                 });
             });
         });
+    </script>
+    <script>
+        // Color settings for grading table
+        function showColorSettings() {
+            const wrapper = document.getElementById('configModalWrapper');
+            
+            // Get current colors from CSS variables
+            const rootStyles = getComputedStyle(document.documentElement);
+            const equivBg = rootStyles.getPropertyValue('--grade-equiv-bg').trim() || '#FFFF00';
+            const equivText = rootStyles.getPropertyValue('--grade-equiv-text').trim() || '#000000';
+            const weightBg = rootStyles.getPropertyValue('--grade-weight-bg').trim() || '#FF0000';
+            const weightText = rootStyles.getPropertyValue('--grade-weight-text').trim() || '#FFFFFF';
+            
+            // Try to load saved colors from localStorage
+            const saved = localStorage.getItem(`grading-colors-${<?= $classId ?>}`);
+            let colors = { equivBg, equivText, weightBg, weightText };
+            if (saved) {
+                try {
+                    colors = JSON.parse(saved);
+                } catch (e) {}
+            }
+            
+            let modalHtml = `
+                <div class="modal fade" id="colorSettingsModal" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog modal-dialog-centered">
+                        <div class="modal-content">
+                            <div class="modal-header">
+                                <h5 class="modal-title"><i class="bi bi-palette me-2"></i>Table Color Settings</h5>
+                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                            </div>
+                            <div class="modal-body">
+                                <p class="text-muted small mb-3">Customize the colors for equivalent/percentage cells (yellow) and weight cells (red).</p>
+                                
+                                <div class="row g-3 mb-3">
+                                    <label class="col-sm-4 col-form-label">Equivalent/Percentage</label>
+                                    <div class="col-sm-8">
+                                        <div class="row g-2">
+                                            <div class="col-6">
+                                                <label class="form-label">Background</label>
+                                                <input type="color" class="form-control form-control-color" id="equivBgColor" value="${colors.equivBg}" title="Choose background color">
+                                            </div>
+                                            <div class="col-6">
+                                                <label class="form-label">Text</label>
+                                                <input type="color" class="form-control form-control-color" id="equivTextColor" value="${colors.equivText}" title="Choose text color">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="row g-3 mb-3">
+                                    <label class="col-sm-4 col-form-label">Weight/Percentage</label>
+                                    <div class="col-sm-8">
+                                        <div class="row g-2">
+                                            <div class="col-6">
+                                                <label class="form-label">Background</label>
+                                                <input type="color" class="form-control form-control-color" id="weightBgColor" value="${colors.weightBg}" title="Choose background color">
+                                            </div>
+                                            <div class="col-6">
+                                                <label class="form-label">Text</label>
+                                                <input type="color" class="form-control form-control-color" id="weightTextColor" value="${colors.weightText}" title="Choose text color">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="alert alert-info small mb-3">
+                                    <i class="bi bi-info-circle me-1"></i>
+                                    Changes apply immediately. Colors are saved per class in your browser.
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="button" class="btn btn-primary" onclick="saveColorSettings()">
+                                    <i class="bi bi-check me-1"></i> Save Colors
+                                </button>
+                                <button type="button" class="btn btn-outline-secondary" onclick="resetColorSettings()">
+                                    <i class="bi bi-arrow-counterclockwise me-1"></i> Reset to Default
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            wrapper.innerHTML = modalHtml;
+            const modal = new bootstrap.Modal(document.getElementById('colorSettingsModal'));
+            modal.show();
+        }
+        
+        function saveColorSettings() {
+            const colors = {
+                equivBg: document.getElementById('equivBgColor').value,
+                equivText: document.getElementById('equivTextColor').value,
+                weightBg: document.getElementById('weightBgColor').value,
+                weightText: document.getElementById('weightTextColor').value
+            };
+            
+            // Apply to CSS variables
+            document.documentElement.style.setProperty('--grade-equiv-bg', colors.equivBg);
+            document.documentElement.style.setProperty('--grade-equiv-text', colors.equivText);
+            document.documentElement.style.setProperty('--grade-weight-bg', colors.weightBg);
+            document.documentElement.style.setProperty('--grade-weight-text', colors.weightText);
+            
+            // Save to localStorage
+            localStorage.setItem(`grading-colors-${<?= $classId ?>}`, JSON.stringify(colors));
+            
+            bootstrap.Modal.getInstance(document.getElementById('colorSettingsModal')).hide();
+            
+            // Refresh table to apply new colors
+            loadGradingSheet(<?= $classId ?>, '<?= $period ?>');
+        }
+        
+        function resetColorSettings() {
+            document.getElementById('equivBgColor').value = '#FFFF00';
+            document.getElementById('equivTextColor').value = '#000000';
+            document.getElementById('weightBgColor').value = '#FF0000';
+            document.getElementById('weightTextColor').value = '#FFFFFF';
+            saveColorSettings();
+        }
+        
+        // Apply saved colors on page load
+        (function() {
+            const saved = localStorage.getItem(`grading-colors-${<?= $classId ?>}`);
+            if (saved) {
+                try {
+                    const colors = JSON.parse(saved);
+                    document.documentElement.style.setProperty('--grade-equiv-bg', colors.equivBg);
+                    document.documentElement.style.setProperty('--grade-equiv-text', colors.equivText);
+                    document.documentElement.style.setProperty('--grade-weight-bg', colors.weightBg);
+                    document.documentElement.style.setProperty('--grade-weight-text', colors.weightText);
+                } catch (e) {}
+            }
+        })();
     </script>
     <?php endif; ?>
 </body>

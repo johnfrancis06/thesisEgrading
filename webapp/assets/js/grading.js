@@ -18,81 +18,6 @@ async function loadGradingSheet(classId, period) {
     }
 }
 
-async function loadPerfectScores(classId, period) {
-    try {
-        const resp = await fetch(`api/index.php?action=get_component_perfect_scores&class_id=${classId}&period=${period}`, {
-            credentials: 'include'
-        });
-        const data = await resp.json();
-        if (!data.success) return;
-        
-        const scores = data.data;
-        document.querySelectorAll('.perfect-score-input').forEach(input => {
-            const component = input.dataset.component;
-            if (scores[component] !== undefined) {
-                input.value = scores[component];
-            } else {
-                input.value = '';
-            }
-        });
-    } catch (e) {
-        console.error('Error loading perfect scores:', e);
-    }
-}
-
-async function savePerfectScores() {
-    const classId = document.getElementById('perfectScoreClassId').value;
-    const period = document.getElementById('perfectScorePeriod').value;
-    
-    const scores = {
-        class_participation: parseFloat(document.getElementById('ps_class_participation').value) || 0,
-        problem_set: parseFloat(document.getElementById('ps_problem_set').value) || 0,
-        quizzes: parseFloat(document.getElementById('ps_quizzes').value) || 0,
-        periodical_exam: parseFloat(document.getElementById('ps_periodical_exam').value) || 0
-    };
-    
-    try {
-        const resp = await fetch(`api/index.php?action=save_component_perfect_scores`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ class_id: classId, period, scores })
-        });
-        const data = await resp.json();
-        if (data.success) {
-            alert('Perfect scores saved!');
-            loadPerfectScores(classId, period);
-            bootstrap.Modal.getInstance(document.getElementById('perfectScoreModal')).hide();
-            loadGradingSheet(classId, period);
-        } else {
-            alert('Error: ' + data.message);
-        }
-    } catch (e) {
-        alert('Error: ' + e.message);
-    }
-}
-
-function showPerfectScoreModal() {
-    const urlParams = new URLSearchParams(window.location.search);
-    const classId = urlParams.get('id');
-    const period = urlParams.get('period') || 'midterm';
-    
-    document.getElementById('perfectScoreClassId').value = classId;
-    document.getElementById('perfectScorePeriod').value = period;
-    document.getElementById('modalPeriodLabel').textContent = period.charAt(0).toUpperCase() + period.slice(1);
-    
-    document.querySelectorAll('.perfect-score-input').forEach(input => {
-        const component = input.dataset.component;
-        const modalInput = document.getElementById('ps_' + component);
-        if (modalInput) {
-            modalInput.value = input.value || '';
-        }
-    });
-    
-    const modal = new bootstrap.Modal(document.getElementById('perfectScoreModal'));
-    modal.show();
-}
-
 async function renderGradingTable(data, classId, period) {
     const table = document.getElementById('gradingTable');
     const thead = document.getElementById('gradingHead');
@@ -265,7 +190,7 @@ function buildPerfectScoreRow(configs) {
         
         html += `<td class="cell-total perfect-cell">${perfectScore || ''}</td>`;
         html += `<td class="cell-equiv perfect-cell"></td>`;
-        html += `<td class="cell-weight perfect-cell"><input type="number" class="weight-input" data-component="${getComponentKeyFromTemplate(config.template_id)}" data-max-weight="${weight}" value="${weight}" readonly style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: #FF0000; color: #FFF;"></td>`;
+        html += `<td class="cell-weight perfect-cell"><input type="number" class="weight-input" data-component="${getComponentKeyFromTemplate(config.template_id)}" data-max-weight="${weight}" value="${weight}" readonly style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold;"></td>`;
     });
     
     // Summary columns
@@ -314,7 +239,7 @@ function buildStudentRow(student, configs, period) {
         const equivScore = perfectScore > 0 ? transmute(rawTotal, perfectScore) : 0;
         html += `<td class="cell-total cell-readonly">${rawTotal > 0 ? rawTotal : ''}</td>`;
         html += `<td class="cell-equiv cell-readonly">${rawTotal > 0 ? equivScore.toFixed(2) : ''}</td>`;
-        html += `<td class="cell-weight"><input type="number" class="weight-input" data-student="${student.id}" data-component="${key}" data-max-weight="100" value="${weight.toFixed(2)}" step="0.01" min="0" max="100" oninput="onWeightInput(this, ${student.id}, '${key}')" style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold; background: #FF0000; color: #FFF;"></td>`;
+        html += `<td class="cell-weight"><input type="number" class="weight-input" data-student="${student.id}" data-component="${key}" data-max-weight="100" value="${weight.toFixed(2)}" step="0.01" min="0" max="100" oninput="onWeightInput(this, ${student.id}, '${key}')" style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold;"></td>`;
     });
     
     // Calculate initial weighted total for display
@@ -500,59 +425,92 @@ function calculateRowGrades(studentId) {
     
     if (configs.length === 0) return;
     
-    let allWeightedScores = {};
+    let allComponentData = {};
+    
+    // Get configured weights from configs (not editable inputs)
+    const weights = {};
+    configs.forEach(config => {
+        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        weights[key] = parseFloat(config.weight_percent) / 100 || 0;
+    });
+    
+    // Build component details (from DOM inputs) for each component
+    const componentDetails = {};
     
     configs.forEach(config => {
         const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-        const configuredWeight = parseFloat(config.weight_percent) || 0;
         const perfectScore = perfectScores[key] || getCategoryPerfectScore(config) || 100;
         
         let total = 0;
+        const items = [];
+        let hasAnyScore = false;
         
         const inputs = document.querySelectorAll(`input.grade-input[data-student="${studentId}"][data-component="${key}"]`);
-        inputs.forEach(input => {
+        inputs.forEach((input, idx) => {
             const score = parseFloat(input.value) || 0;
+            const maxScore = parseFloat(input.dataset.max) || 100;
+            const hasScore = input.value !== '' && input.value !== null && input.value !== undefined;
             total += score;
+            
+            items.push({
+                label: input.dataset.label || `Item ${idx + 1}`,
+                raw_score: hasScore ? score : 0,
+                max_score: maxScore,
+                has_score: hasScore
+            });
+            
+            if (hasScore) hasAnyScore = true;
         });
         
         const equivScore = perfectScore > 0 ? transmute(total, perfectScore) : 0;
         
-        // Read weight from input (editable by teacher)
-        const weightInput = document.querySelector(`input.weight-input[data-student="${studentId}"][data-component="${key}"]`);
-        const isManuallyEdited = weightInput && weightInput.dataset.manuallyEdited === 'true';
-        const manualWeightPercent = weightInput ? parseFloat(weightInput.value) : configuredWeight;
+        componentDetails[key] = {
+            items: items,
+            raw_total: total,
+            max_total: perfectScore
+        };
         
-        // Use configured weight for calculation unless manually edited
-        const weightForCalc = isManuallyEdited ? (Number.isFinite(manualWeightPercent) ? manualWeightPercent : configuredWeight) : configuredWeight;
-        const weight = weightForCalc / 100;
-        
-        const weighted = equivScore * weight;
-        
-        // Effective weight = earned percentage * configured weight / 100
-        // e.g., 90% score * 20% weight = 18% effective weight (for display)
-        const effectiveWeight = equivScore > 0 ? (equivScore * configuredWeight) / 100 : 0;
-        
-        allWeightedScores[key] = { 
-            total, 
-            equiv: equivScore, 
-            weighted, 
-            weight: effectiveWeight, 
-            configuredWeight,
-            isManuallyEdited
+        allComponentData[key] = {
+            total: total,
+            equiv: equivScore,
+            hasAnyScore: hasAnyScore,
+            perfectScore: perfectScore,
+            configuredWeight: weights[key] * 100
         };
     });
     
-    // Calculate period grade (sum of weighted scores)
-    let periodGrade = 0;
-    Object.values(allWeightedScores).forEach(data => {
-        periodGrade += (data.weighted || 0);
-    });
+    // Calculate period grade using backend formula
+    const componentScores = Object.fromEntries(Object.entries(allComponentData).map(([k, v]) => [k, v.equiv]));
+    const periodGrade = calculatePeriodGrade(componentScores, componentDetails, weights);
+    
+    // Calculate grade point
+    const gradePoint = getGradePoint(periodGrade);
+    
+    // Check completeness for this period
+    const urlParams = new URLSearchParams(window.location.search);
+    const currentPeriod = urlParams.get('period') || 'midterm';
+    
+    const completeness = checkPeriodCompleteness(
+        Object.fromEntries(Object.entries(componentDetails).map(([k, v]) => [k, {
+            complete: v.items.length > 0 && v.items.every(item => item.has_score),
+            missing_items: v.items.filter(item => !item.has_score).map(item => item.label),
+            configured: v.items.length > 0,
+            total_items: v.items.length,
+            scored_items: v.items.filter(item => item.has_score).length
+        }])),
+        currentPeriod
+    );
+    
+    const isComplete = completeness.complete;
+    const isDropped = false;
+    
+    const remarks = getRemarks(gradePoint, isComplete, isDropped);
     
     // Update all computed cells for this student
-    updateComputedCells(studentId, allWeightedScores, periodGrade, configs);
+    updateComputedCells(studentId, allComponentData, periodGrade, configs, gradePoint, remarks, isComplete);
 }
 
-function updateComputedCells(studentId, allWeightedScores, periodGrade, configs) {
+function updateComputedCells(studentId, allComponentData, periodGrade, configs, gradePoint, remarks, isComplete) {
     const row = document.querySelector(`tr[data-student="${studentId}"]`);
     if (!row) return;
     
@@ -567,7 +525,7 @@ function updateComputedCells(studentId, allWeightedScores, periodGrade, configs)
     if (configs && configs.length > 0) {
         configs.forEach((config, idx) => {
             const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-            const data = allWeightedScores[key];
+            const data = allComponentData[key];
             if (!data) return;
             
             // Total cell
@@ -598,7 +556,7 @@ function updateComputedCells(studentId, allWeightedScores, periodGrade, configs)
         // Fallback to old behavior
         const compOrder = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
         compOrder.forEach((compKey, idx) => {
-            const data = allWeightedScores[compKey];
+            const data = allComponentData[compKey];
             if (!data) return;
             
             if (totalCells[idx]) totalCells[idx].textContent = data.total > 0 ? data.total : '';
@@ -616,7 +574,7 @@ function updateComputedCells(studentId, allWeightedScores, periodGrade, configs)
         });
     }
     
-    // Midterm grade
+    // Midterm/Final grade (period grade)
     if (midtermCell) {
         midtermCell.textContent = periodGrade > 0 ? periodGrade.toFixed(2) : '';
     }
@@ -626,9 +584,8 @@ function updateComputedCells(studentId, allWeightedScores, periodGrade, configs)
         roundoffCell.textContent = periodGrade > 0 ? Math.round(periodGrade) : '';
     }
     
-    // Remarks
+    // Remarks - use backend formula
     if (remarksCell) {
-        const remarks = periodGrade >= 75 ? 'Passed' : (periodGrade > 0 ? 'Failed' : 'INC');
         remarksCell.textContent = remarks;
     }
 }
@@ -674,32 +631,80 @@ function getGradePoint(score) {
     return 1.00;
 }
 
+// Calculate period grade matching backend formula:
+// Only weights components that have at least one scored item
+// Normalizes by total weight of completed components
+function calculatePeriodGrade(componentScores, componentDetails, weights) {
+    weights = weights || {
+        'class_participation': 0.20,
+        'problem_set': 0.20,
+        'quizzes': 0.30,
+        'periodical_exam': 0.30
+    };
+    
+    let weightedSum = 0;
+    let totalWeight = 0;
+    
+    for (const [component, score] of Object.entries(componentScores)) {
+        if (!weights[component]) continue;
+        
+        // Check if this component has any scored items
+        const details = componentDetails[component] || null;
+        let hasScores = false;
+        if (details && details.items) {
+            for (const item of details.items) {
+                if (item.has_score && item.raw_score !== null && item.raw_score !== undefined) {
+                    hasScores = true;
+                    break;
+                }
+            }
+        }
+        
+        if (hasScores) {
+            weightedSum += score * weights[component];
+            totalWeight += weights[component];
+        }
+    }
+    
+    // Normalize by total weight of completed components
+    if (totalWeight > 0) {
+        return Math.round(weightedSum / totalWeight * 100) / 100;
+    }
+    
+    return 0;
+}
+
+// Calculate overall final grade matching backend:
+// If both midterm and final complete: Overall = (Final × 0.6) + (Midterm × 0.4)
+// If only one period complete: use that period's grade
+function calculateOverallGrade(midtermGrade, finalGrade, midtermComplete, finalComplete) {
+    if (midtermComplete && finalComplete) {
+        return Math.round((finalGrade * 0.6) + (midtermGrade * 0.4));
+    } else if (midtermComplete) {
+        return Math.round(midtermGrade);
+    } else if (finalComplete) {
+        return Math.round(finalGrade);
+    }
+    return 0;
+}
+
+// Determine remarks matching backend:
+// DRP = Dropped student
+// INC = Incomplete requirements
+// Failed = Complete but below 75%
+// Passed = Complete and 75% or above
+function getRemarks(gradePoint, isComplete, isDropped) {
+    if (isDropped) return 'DRP';
+    if (!isComplete) return 'INC';
+    if (gradePoint === 5.00) return 'Failed';
+    return 'Passed';
+}
+
 document.addEventListener('hide.bs.modal', function (event) {
-    if (document.activeElement && event.target.contains(document.activeElement)) {
+if (document.activeElement && event.target.contains(document.activeElement)) {
         document.activeElement.blur();
     }
 });
-
-// Perfect Score Category Toggle
-window.perfectScoreCollapsed = false;
-
-function togglePerfectScoreCategory() {
-    const body = document.getElementById('perfectScoreBody');
-    const chevron = document.getElementById('perfectScoreChevron');
-    const category = document.getElementById('perfectScoreCategory');
-    
-    window.perfectScoreCollapsed = !window.perfectScoreCollapsed;
-    
-    if (window.perfectScoreCollapsed) {
-        body.style.display = 'none';
-        chevron.style.transform = 'rotate(-90deg)';
-        category.classList.add('collapsed');
-    } else {
-        body.style.display = 'block';
-        chevron.style.transform = 'rotate(0deg)';
-        category.classList.remove('collapsed');
-    }
-}
 
 // ==========================================
 // CATEGORY MANAGEMENT
@@ -1059,3 +1064,345 @@ window.deleteGradeItem = deleteGradeItem;
 window.updateCategoryWeight = updateCategoryWeight;
 window.exportVisibleGradingSheet = exportVisibleGradingSheet;
 window.printVisibleGradingSheet = printVisibleGradingSheet;
+window.loadTotalGrades = loadTotalGrades;
+window.toggleCompletenessDetails = toggleCompletenessDetails;
+
+// Total Grade Tab - Shows Midterm and Final grades combined (simple view)
+async function loadTotalGrades(classId) {
+    try {
+        const resp = await fetch(`api/index.php?action=get_class_grades&class_id=${classId}`, {
+            credentials: 'include'
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            console.error('API Error:', data.message);
+            return;
+        }
+        
+        // DEBUG: Log the API response
+        console.log('Total Grades API Response:', data);
+        if (data.data && data.data.grades && data.data.grades.length > 0) {
+            console.log('First student grades:', data.data.grades[0]);
+        }
+        
+        renderTotalGradesTable(data.data, classId);
+    } catch (e) {
+        console.error('Error loading total grades:', e);
+        document.getElementById('gradingBody').innerHTML = `<tr><td colspan="50" class="text-center text-danger">Error loading total grades: ${e.message}</td></tr>`;
+    }
+}
+
+function renderTotalGradesTable(data, classId) {
+    const thead = document.getElementById('gradingHead');
+    const tbody = document.getElementById('gradingBody');
+    const container = document.querySelector('.grading-table-wrapper');
+    
+    if (!data || !data.grades || data.grades.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="50" class="text-center">No students found</td></tr>`;
+        return;
+    }
+    
+    const gradesData = data.grades;
+    const classInfo = data.class;
+    const midtermWeight = classInfo.midterm_weight ? Math.round(classInfo.midterm_weight * 100) : 40;
+    const finalWeight = classInfo.final_weight ? Math.round(classInfo.final_weight * 100) : 60;
+    
+    // Build completeness overview
+    const overviewHtml = buildCompletenessOverview(gradesData);
+    
+    // Insert overview above table
+    if (container) {
+        const existingOverview = container.querySelector('.completeness-overview');
+        if (existingOverview) existingOverview.remove();
+        container.insertAdjacentHTML('beforebegin', overviewHtml);
+    }
+    
+    // Simple header - just student name, midterm, final, total
+    let headerHTML = '';
+    headerHTML += '<tr class="header-row1">';
+    headerHTML += '<th rowspan="2" class="col-student" style="min-width: 220px; max-width: 220px;">Name of Students</th>';
+    headerHTML += `<th colspan="3" class="header-main bg-info text-white">MIDTERM GRADE (${midtermWeight}%)</th>`;
+    headerHTML += `<th colspan="3" class="header-main bg-primary text-white">FINAL GRADE (${finalWeight}%)</th>`;
+    headerHTML += '<th rowspan="2" class="header-main header-midterm bg-success text-white" style="min-width: 100px;">TOTAL GRADE</th>';
+    headerHTML += '<th rowspan="2" class="header-main header-roundoff bg-success text-white" style="min-width: 80px;">Round off</th>';
+    headerHTML += '<th rowspan="2" class="header-main header-remarks bg-success text-white" style="min-width: 90px;">REMARKS</th>';
+    headerHTML += '</tr>';
+    
+    headerHTML += '<tr class="header-row2">';
+    headerHTML += '<th class="header-col header-raw bg-info text-white">Grade</th>';
+    headerHTML += '<th class="header-col header-equiv bg-info text-white">Grade Point</th>';
+    headerHTML += '<th class="header-col header-total bg-info text-white">Remarks</th>';
+    headerHTML += '<th class="header-col header-raw bg-primary text-white">Grade</th>';
+    headerHTML += '<th class="header-col header-equiv bg-primary text-white">Grade Point</th>';
+    headerHTML += '<th class="header-col header-total bg-primary text-white">Remarks</th>';
+    headerHTML += '</tr>';
+    
+    headerHTML += '<tr class="header-row3"></tr>';
+    
+    thead.innerHTML = headerHTML;
+    
+    // Build body rows
+    let bodyHTML = '';
+    gradesData.forEach(student => {
+        bodyHTML += buildTotalGradeStudentRow(student);
+    });
+    
+    tbody.innerHTML = bodyHTML || `<tr><td colspan="10" class="text-center">No data</td></tr>`;
+    
+    // Initialize Bootstrap tooltips for completeness warnings
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+}
+
+function buildCompletenessOverview(gradesData) {
+    const requiredComponents = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
+    const componentLabels = {
+        'class_participation': 'Class Participation',
+        'problem_set': 'Problem Set',
+        'quizzes': 'Quizzes',
+        'periodical_exam': 'Periodical Exam'
+    };
+    
+    let completeCount = 0;
+    let incompleteCount = 0;
+    const studentStatus = [];
+    
+    gradesData.forEach(student => {
+        const completeness = student.completeness || {};
+        let studentComplete = true;
+        const missingDetails = [];
+        
+        ['midterm', 'final'].forEach(period => {
+            const periodData = completeness[period] || {};
+            requiredComponents.forEach(comp => {
+                const data = periodData[comp];
+                if (data && data.configured && !data.complete) {
+                    studentComplete = false;
+                    missingDetails.push({
+                        period: period.charAt(0).toUpperCase() + period.slice(1),
+                        component: componentLabels[comp] || comp,
+                        missing: data.missing_items,
+                        scored: data.scored_items,
+                        total: data.total_items
+                    });
+                }
+            });
+        });
+        
+        if (studentComplete) {
+            completeCount++;
+        } else {
+            incompleteCount++;
+        }
+        
+        studentStatus.push({
+            name: `${student.last_name}, ${student.first_name} ${student.middle_initial || ''}.`,
+            complete: studentComplete,
+            missing: missingDetails
+        });
+    });
+    
+    let html = `
+        <div class="completeness-overview card mb-3">
+            <div class="card-header bg-light d-flex justify-content-between align-items-center">
+                <h6 class="mb-0"><i class="bi bi-clipboard-check me-2"></i>Grade Completeness Overview</h6>
+                <button class="btn btn-sm btn-outline-secondary" onclick="toggleCompletenessDetails()">
+                    <i class="bi bi-chevron-down" id="overviewToggleIcon"></i> Details
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-3">
+                        <div class="text-center p-3 bg-success bg-opacity-10 rounded">
+                            <div class="display-6 fw-bold text-success">${completeCount}</div>
+                            <small class="text-muted">Complete</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center p-3 bg-warning bg-opacity-10 rounded">
+                            <div class="display-6 fw-bold text-warning">${incompleteCount}</div>
+                            <small class="text-muted">Incomplete</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center p-3 bg-info bg-opacity-10 rounded">
+                            <div class="display-6 fw-bold text-info">${gradesData.length}</div>
+                            <small class="text-muted">Total Students</small>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="text-center p-3 bg-secondary bg-opacity-10 rounded">
+                            <div class="display-6 fw-bold text-secondary">${gradesData.length > 0 ? Math.round((completeCount / gradesData.length) * 100) : 0}%</div>
+                            <small class="text-muted">Completion Rate</small>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="completenessDetails" class="collapse">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width: 40%;">Student</th>
+                                    <th style="width: 15%;">Status</th>
+                                    <th>Missing Details</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+    
+    studentStatus.forEach(s => {
+        const statusBadge = s.complete 
+            ? '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Complete</span>'
+            : '<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i>Incomplete</span>';
+        
+        let missingHtml = s.complete ? '<span class="text-muted">All requirements met</span>' : '';
+        if (!s.complete) {
+            missingHtml = '<ul class="mb-0 ps-3 small">';
+            s.missing.forEach(m => {
+                missingHtml += `<li><strong>${m.period} - ${m.component}:</strong> ${m.missing.join(', ')} <span class="text-muted">(${m.scored}/${m.total} scored)</span></li>`;
+            });
+            missingHtml += '</ul>';
+        }
+        
+        html += `
+            <tr class="${s.complete ? 'table-success' : 'table-warning'}">
+                <td class="fw-medium">${s.name}</td>
+                <td>${statusBadge}</td>
+                <td>${missingHtml}</td>
+            </tr>`;
+    });
+    
+    html += `
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    
+    return html;
+}
+
+function toggleCompletenessDetails() {
+    const collapseEl = document.getElementById('completenessDetails');
+    const icon = document.getElementById('overviewToggleIcon');
+    if (collapseEl.classList.contains('show')) {
+        bootstrap.Collapse.getInstance(collapseEl)?.hide();
+        icon.classList.remove('bi-chevron-up');
+        icon.classList.add('bi-chevron-down');
+    } else {
+        new bootstrap.Collapse(collapseEl, { toggle: true });
+        icon.classList.remove('bi-chevron-down');
+        icon.classList.add('bi-chevron-up');
+    }
+}
+
+function buildTotalGradeStudentRow(student) {
+    const midterm = student.midterm || {};
+    const final = student.final || {};
+    const overall = student.overall || {};
+    const completeness = student.completeness || {};
+    const componentScores = student.component_scores || {};
+    const isDropped = student.is_dropped || false;
+    
+    const midtermGrade = midterm.grade !== undefined ? midterm.grade : 0;
+    const midtermGradePoint = midterm.grade_point !== undefined ? midterm.grade_point : 0;
+    const midtermRemarks = midterm.remarks || '';
+    const finalGrade = final.grade !== undefined ? final.grade : 0;
+    const finalGradePoint = final.grade_point !== undefined ? final.grade_point : 0;
+    const finalRemarks = final.remarks || '';
+    const overallGrade = overall.grade !== undefined ? overall.grade : 0;
+    const overallGradePoint = overall.grade_point !== undefined ? overall.grade_point : 0;
+    const overallRounded = overallGrade !== undefined && overallGrade !== '' ? Math.round(overallGrade) : '';
+    const overallRemarks = overall.remarks || '';
+    
+    // Check completeness for midterm and final
+    const midtermCompleteness = checkPeriodCompleteness(completeness, 'midterm');
+    const finalCompleteness = checkPeriodCompleteness(completeness, 'final');
+    const overallComplete = midtermCompleteness.complete && finalCompleteness.complete;
+    
+    let html = `<tr data-student="${student.id}"${isDropped ? ' class="table-secondary"' : ''}>`;
+    html += `<td class="col-student" style="min-width: 220px; max-width: 220px;">${student.last_name}, ${student.first_name} ${student.middle_initial || ''}.</td>`;
+    
+    // Midterm
+    html += `<td class="cell-raw bg-info">${midtermGrade !== null ? midtermGrade.toFixed(2) : ''}</td>`;
+    html += `<td class="cell-equiv bg-info">${midtermGradePoint !== null ? midtermGradePoint.toFixed(2) : ''}</td>`;
+    html += `<td class="cell-total bg-info">${midtermRemarks}</td>`;
+    
+    // Final
+    html += `<td class="cell-raw bg-primary">${finalGrade !== null ? finalGrade.toFixed(2) : ''}</td>`;
+    html += `<td class="cell-equiv bg-primary">${finalGradePoint !== null ? finalGradePoint.toFixed(2) : ''}</td>`;
+    html += `<td class="cell-total bg-primary">${finalRemarks}</td>`;
+    
+    // Overall - with completeness warning
+    const warningIcon = overallComplete && !isDropped ? '' : `
+        <i class="bi bi-exclamation-triangle-fill text-warning ms-1" 
+           data-bs-toggle="tooltip" 
+           data-bs-placement="top"
+           title="${buildCompletenessTooltip(midtermCompleteness, finalCompleteness, isDropped)}"
+           style="cursor: help;"></i>
+    `;
+    html += `<td class="cell-midterm cell-readonly bg-success text-white fw-bold" style="min-width: 100px;">${overallGrade !== null && overallGrade !== '' ? overallGrade.toFixed(2) : ''}${warningIcon}</td>`;
+    html += `<td class="cell-roundoff cell-readonly bg-success text-white fw-bold" style="min-width: 80px;">${overallRounded !== '' ? overallRounded : ''}</td>`;
+    html += `<td class="cell-remarks cell-readonly bg-success text-white fw-bold" style="min-width: 90px;">${overallRemarks}</td>`;
+    
+    html += '</tr>';
+    return html;
+}
+
+function checkPeriodCompleteness(completeness, period) {
+    const periodData = completeness[period] || {};
+    const requiredComponents = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
+    let complete = true;
+    const missingComponents = [];
+    
+    requiredComponents.forEach(comp => {
+        const data = periodData[comp];
+        if (data && data.configured && !data.complete) {
+            complete = false;
+            missingComponents.push({
+                name: formatComponentName(comp),
+                missing: data.missing_items,
+                scored: data.scored_items,
+                total: data.total_items
+            });
+        }
+    });
+    
+    return { complete, missingComponents };
+}
+
+function formatComponentName(comp) {
+    const names = {
+        'class_participation': 'Class Participation',
+        'problem_set': 'Problem Set',
+        'quizzes': 'Quizzes',
+        'periodical_exam': 'Periodical Exam'
+    };
+    return names[comp] || comp.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+function buildCompletenessTooltip(midtermComp, finalComp, isDropped) {
+    if (isDropped) {
+        return 'Student is dropped (DRP)';
+    }
+    let tooltip = 'Incomplete grades:\\n';
+    
+    if (midtermComp.missingComponents.length > 0) {
+        tooltip += '\\nMidterm:';
+        midtermComp.missingComponents.forEach(comp => {
+            tooltip += `\\n  • ${comp.name}: missing ${comp.missing.join(', ')} (${comp.scored}/${comp.total} scored)`;
+        });
+    }
+    
+    if (finalComp.missingComponents.length > 0) {
+        tooltip += '\\nFinal:';
+        finalComp.missingComponents.forEach(comp => {
+            tooltip += `\\n  • ${comp.name}: missing ${comp.missing.join(', ')} (${comp.scored}/${comp.total} scored)`;
+        });
+    }
+    
+    return tooltip;
+}
