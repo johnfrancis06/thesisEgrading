@@ -64,22 +64,29 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
         </header>
         
         <main class="content-area-modern">
-                        <div class="card fade-in mb-3">
+            <?php if (!$class): ?>
+            <div class="card fade-in mb-3">
                 <div class="card-body">
                     <div class="row g-3 align-items-end">
                         <div class="col-md-3">
                             <label class="form-label">Year Level</label>
-                            <select id="filterYear" class="form-select" onchange="updateSections()">
+                            <select id="filterYear" class="form-select" onchange="updateFilters()">
                                 <option value="">All Years</option>
                             </select>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label">Section</label>
-                            <select id="filterSection" class="form-select">
+                            <select id="filterSection" class="form-select" onchange="updateFilters()">
                                 <option value="">All Sections</option>
                             </select>
                         </div>
-                        <div class="col-md-2">
+                        <div class="col-md-3">
+                            <label class="form-label">Subject</label>
+                            <select id="filterSubject" class="form-select" onchange="applyFilters()">
+                                <option value="">All Subjects</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
                             <button class="btn btn-primary w-100" onclick="applyFilters()">
                                 <i class="bi bi-funnel"></i> Filter
                             </button>
@@ -87,6 +94,7 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
                     </div>
                 </div>
             </div>
+            <?php endif; ?>
             <?php if ($class): ?>
             <div class="page-header fade-in">
                 <div class="page-header-left">
@@ -167,64 +175,102 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
             document.getElementById('sidebarOverlay').classList.toggle('show');
         });
         
-        async function loadEnrolledSections() {
-            const resp = await fetch('api/index.php?action=get_enrolled_sections');
-            const data = await resp.json();
-            
-            if (data.success && data.data.length > 0) {
+        async function loadFilterOptions() {
+            try {
+                const resp = await fetch('api/index.php?action=get_student_filter_options');
+                const data = await resp.json();
+                if (!data.success) return;
+
+                window.classOptions = data.data;
+
+                const years = [...new Set(data.data.map(o => o.year_level))]
+                    .filter(y => y !== null && y !== '')
+                    .sort((a, b) => a - b);
+
                 const yearSelect = document.getElementById('filterYear');
-                const sectionSelect = document.getElementById('filterSection');
-                
-                // Get unique years and sections
-                const years = [...new Set(data.data.map(s => s.year_level))].sort((a, b) => a - b);
-                const sections = [...new Set(data.data.map(s => s.section))].sort();
-                
-                // Populate year dropdown
                 years.forEach(year => {
                     const option = document.createElement('option');
                     option.value = year;
-                    option.textContent = year + ' Year';
+                    option.textContent = 'Year ' + year;
                     yearSelect.appendChild(option);
                 });
-                
-                // Store all sections for filtering
-                window.allSections = data.data;
-                
-                // Populate section dropdown with all sections initially
-                updateSections();
+
+                updateFilters();
+            } catch (e) {
+                console.error('Error loading filter options:', e);
             }
-        }
-        
-        function updateSections() {
-            const yearSelect = document.getElementById('filterYear');
-            const sectionSelect = document.getElementById('filterSection');
-            const selectedYear = yearSelect.value;
-            
-            // Clear existing options except "All Sections"
-            sectionSelect.innerHTML = '<option value="">All Sections</option>';
-            
-            if (!window.allSections) return;
-            
-            // Filter sections by selected year
-            let sections;
-            if (selectedYear) {
-                sections = [...new Set(window.allSections.filter(s => s.year_level == selectedYear).map(s => s.section))];
-            } else {
-                sections = [...new Set(window.allSections.map(s => s.section))];
-            }
-            
-            sections.sort().forEach(section => {
-                const option = document.createElement('option');
-                option.value = section;
-                option.textContent = 'Section ' + section;
-                sectionSelect.appendChild(option);
-            });
         }
 
-        async function loadStudents(classId, yearLevel, section) {
+        // Sections narrow by year level; subjects narrow by year level and section.
+        function updateFilters() {
+            const yearSelect = document.getElementById('filterYear');
+            const sectionSelect = document.getElementById('filterSection');
+            const subjectSelect = document.getElementById('filterSubject');
+            if (!sectionSelect || !subjectSelect) return;
+
+            const selectedYear = yearSelect.value;
+            const selectedSection = sectionSelect.value;
+            const options = window.classOptions || [];
+
+            const inYear = options.filter(o => !selectedYear || String(o.year_level) === String(selectedYear));
+            const inSection = inYear.filter(o =>
+                !selectedSection || String(o.section).toLowerCase() === selectedSection.toLowerCase()
+            );
+
+            // The database compares these columns case-insensitively, so collapse the
+            // 'A'/'a' duplicates that survive the DISTINCT query.
+            const uniqueValues = values => {
+                const seen = new Map();
+                values.filter(Boolean).forEach(value => {
+                    const key = String(value).toLowerCase();
+                    if (!seen.has(key)) seen.set(key, value);
+                });
+                return [...seen.entries()];
+            };
+
+            sectionSelect.innerHTML = '<option value="">All Sections</option>';
+            uniqueValues(inYear.map(o => o.section))
+                .sort((a, b) => a[1].localeCompare(b[1], undefined, { sensitivity: 'base' }))
+                .forEach(([, section]) => {
+                    const option = document.createElement('option');
+                    option.value = section;
+                    option.textContent = 'Section ' + section;
+                    sectionSelect.appendChild(option);
+                });
+            if (selectedSection) sectionSelect.value = selectedSection;
+
+            const subjects = new Map();
+            inSection.forEach(o => {
+                if (!o.subject_code) return;
+                const key = String(o.subject_code).toLowerCase();
+                if (!subjects.has(key)) {
+                    subjects.set(key, { code: o.subject_code, title: o.subject_title });
+                }
+            });
+
+            const selectedSubject = subjectSelect.value;
+            const selectedSubjectKey = selectedSubject.toLowerCase();
+            subjectSelect.innerHTML = '<option value="">All Subjects</option>';
+            [...subjects.values()]
+                .sort((a, b) => a.code.localeCompare(b.code, undefined, { sensitivity: 'base' }))
+                .forEach(subject => {
+                    const option = document.createElement('option');
+                    option.value = subject.code;
+                    option.textContent = subject.title
+                        ? `${subject.code} - ${subject.title}`
+                        : subject.code;
+                    subjectSelect.appendChild(option);
+                });
+            if (subjects.has(selectedSubjectKey)) {
+                subjectSelect.value = subjects.get(selectedSubjectKey).code;
+            }
+        }
+
+        async function loadStudents(classId, yearLevel, section, subject) {
             let url = `api/index.php?action=get_students&class_id=${classId}`;
             if (yearLevel) url += `&year_level=${encodeURIComponent(yearLevel)}`;
             if (section) url += `&section=${encodeURIComponent(section)}`;
+            if (subject) url += `&subject=${encodeURIComponent(subject)}`;
             
             const resp = await fetch(url);
             const data = await resp.json();
@@ -234,10 +280,10 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
                 if (classId) {
                     html = data.data.map(s => `
                         <tr>
-                            <td><strong>${s.student_no}</strong></td>
-                            <td>${s.last_name}</td>
-                            <td>${s.first_name}</td>
-                            <td>${s.middle_initial || '-'}</td>
+                            <td><strong>${escapeStudentHtml(s.student_no)}</strong></td>
+                            <td>${escapeStudentHtml(s.last_name)}</td>
+                            <td>${escapeStudentHtml(s.first_name)}</td>
+                            <td>${escapeStudentHtml(s.middle_initial || '-')}</td>
                         </tr>
                     `).join('');
                 } else {
@@ -296,18 +342,29 @@ $pageTitle = $class ? htmlspecialchars($class['code']) . ' - Students' : 'Select
         }
         
         const currentClassId = <?= $classId ?>;
-        
+
         function applyFilters() {
-            const yearLevel = document.getElementById('filterYear').value;
-            const section = document.getElementById('filterSection').value;
-            loadStudents(currentClassId, yearLevel, section);
+            const yearSelect = document.getElementById('filterYear');
+            const sectionSelect = document.getElementById('filterSection');
+            const subjectSelect = document.getElementById('filterSubject');
+
+            if (!yearSelect || !sectionSelect || !subjectSelect) {
+                loadStudents(currentClassId);
+                return;
+            }
+
+            loadStudents(
+                currentClassId,
+                yearSelect.value,
+                sectionSelect.value,
+                subjectSelect.value
+            );
         }
-        loadEnrolledSections();
-        
+
         <?php if ($class): ?>
         loadStudents(currentClassId);
         <?php else: ?>
-        loadStudents(0);
+        loadFilterOptions().then(applyFilters);
         <?php endif; ?>
     </script>
 

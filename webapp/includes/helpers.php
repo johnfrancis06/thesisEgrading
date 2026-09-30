@@ -1,5 +1,13 @@
 <?php
 
+// Rows per A4 grading sheet. Measured against the letterhead: the header image,
+// course info block and 99mm footer image leave 121mm of the 297mm sheet for the
+// table and each row is 6.35mm, so 17 fits exactly. 15 keeps headroom so long
+// student names that wrap onto a second line cannot spill onto a new sheet.
+if (!defined('GRADING_SHEET_STUDENTS_PER_PAGE')) {
+    define('GRADING_SHEET_STUDENTS_PER_PAGE', 15);
+}
+
 class GradingHelper {
     // Equivalent score is the raw score expressed as a percentage of the perfect score.
     public static function transmute($rawScore, $maxScore) {
@@ -83,17 +91,43 @@ class GradingHelper {
     }
     
     // Calculate overall final grade
-    // If both midterm and final are complete: Overall = (Final × 0.6) + (Midterm × 0.4)
+    // If both midterm and final are complete: Overall = (Final × finalWeight) + (Midterm × midtermWeight)
     // If only one period complete: use that period's grade
-    public static function calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete = false, $finalComplete = false) {
+    public static function calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete = false, $finalComplete = false, $periodWeights = null) {
+        $midtermShare = $periodWeights['midterm'] ?? 0.4;
+        $finalShare = $periodWeights['final'] ?? 0.6;
+
+        // Normalise the shares, falling back to 40/60 when they are unset.
+        $totalShare = $midtermShare + $finalShare;
+        if ($totalShare <= 0) {
+            $midtermShare = 0.4;
+            $finalShare = 0.6;
+        } else {
+            $midtermShare = $midtermShare / $totalShare;
+            $finalShare = $finalShare / $totalShare;
+        }
+
         if ($midtermComplete && $finalComplete) {
-            return round(($finalGrade * 0.6) + ($midtermGrade * 0.4), 0);
+            return round(($finalGrade * $finalShare) + ($midtermGrade * $midtermShare), 0);
         } elseif ($midtermComplete) {
             return round($midtermGrade, 0);
         } elseif ($finalComplete) {
             return round($finalGrade, 0);
         }
         return 0;
+    }
+
+    // Read the midterm/final weights configured for a class
+    public static function getClassPeriodWeights($db, $classId) {
+        $stmt = $db->prepare("SELECT midterm_weight, final_weight FROM class_section WHERE id = ?");
+        $stmt->bind_param("i", $classId);
+        $stmt->execute();
+        $row = $stmt->get_result()->fetch_assoc();
+
+        return [
+            'midterm' => $row ? floatval($row['midterm_weight']) : 0.4,
+            'final' => $row ? floatval($row['final_weight']) : 0.6
+        ];
     }
     
     // Determine remarks based on grade point and completeness
@@ -128,20 +162,45 @@ class GradingHelper {
         return $stmt->execute();
     }
     
+    // Returns the category scope a class must be graded against.
+    // A class that has grade_category_config rows is graded from those synced
+    // categories only. Legacy grade_category rows left behind by the migration
+    // (config_id IS NULL) duplicate the same components, so counting them would
+    // inflate max_total, double-count weights and mark every student incomplete.
+    private static function getCategoryScope($db, $classId) {
+        $check = $db->prepare("SELECT id FROM grade_category_config WHERE class_section_id = ? LIMIT 1");
+        $check->bind_param("i", $classId);
+        $check->execute();
+
+        if ($check->get_result()->fetch_assoc()) {
+            return "gc.config_id IN (SELECT id FROM grade_category_config WHERE class_section_id = ? AND period = gc.period)";
+        }
+
+        return "1 = 1";
+    }
+
     // Calculate all grades for a student in a class
     public static function calculateStudentGrades($db, $classId, $studentId) {
         // Get all raw scores for this student in this class
-        $stmt = $db->prepare("
-            SELECT gi.id, gi.label, gi.max_score, gi.grade_category_id, 
+        $scope = self::getCategoryScope($db, $classId);
+        $sql = "
+            SELECT gi.id, gi.label, gi.max_score, gi.grade_category_id,
                    gc.name as category_name, gc.period, gc.weight_percent,
                    gs.raw_score
             FROM grade_item gi
             JOIN grade_category gc ON gi.grade_category_id = gc.id
             LEFT JOIN grade_score gs ON gs.grade_item_id = gi.id AND gs.student_id = ?
             WHERE gc.class_section_id = ?
+              AND $scope
             ORDER BY gc.period, gc.sort_order, gi.sort_order
-        ");
-        $stmt->bind_param("ii", $studentId, $classId);
+        ";
+
+        $stmt = $db->prepare($sql);
+        if ($scope !== "1 = 1") {
+            $stmt->bind_param("iii", $studentId, $classId, $classId);
+        } else {
+            $stmt->bind_param("ii", $studentId, $classId);
+        }
         $stmt->execute();
         $result = $stmt->get_result();
         
@@ -204,7 +263,9 @@ class GradingHelper {
         
         // Use the configured category weights for each period.
         $periodWeights = ['midterm' => [], 'final' => []];
-        $weightStmt = $db->prepare("SELECT period, name, weight_percent FROM grade_category WHERE class_section_id = ?");
+        $weightSql = "SELECT period, name, weight_percent FROM grade_category
+                      WHERE class_section_id = ? AND config_id IS NOT NULL";
+        $weightStmt = $db->prepare($weightSql);
         $weightStmt->bind_param("i", $classId);
         $weightStmt->execute();
         foreach ($weightStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $weightRow) {
@@ -213,6 +274,22 @@ class GradingHelper {
                 $periodWeights[$weightRow['period']][$component] = floatval($weightRow['weight_percent']) / 100;
             }
         }
+
+        // Categories that exist without a synced config still carry their own weight.
+        $legacyStmt = $db->prepare("SELECT period, name, weight_percent FROM grade_category
+                                    WHERE class_section_id = ? AND config_id IS NULL");
+        $legacyStmt->bind_param("i", $classId);
+        $legacyStmt->execute();
+        foreach ($legacyStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $weightRow) {
+            $component = self::mapCategoryToComponent(strtolower($weightRow['name']));
+            if ($component && isset($periodWeights[$weightRow['period']])
+                && !isset($periodWeights[$weightRow['period']][$component])) {
+                $periodWeights[$weightRow['period']][$component] = floatval($weightRow['weight_percent']) / 100;
+            }
+        }
+
+        // Period weights for the overall grade come from the class, not hardcoded values.
+        $classWeights = self::getClassPeriodWeights($db, $classId);
 
         // Get completeness for each period
         $completeness = self::checkCompleteness($periodData, $perfectScores);
@@ -231,7 +308,7 @@ class GradingHelper {
         
         $midtermGrade = self::calculatePeriodGrade($componentScores['midterm'], $periodData['midterm'], $periodWeights['midterm']);
         $finalGrade = self::calculatePeriodGrade($componentScores['final'], $periodData['final'], $periodWeights['final']);
-        $overallGrade = self::calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete, $finalComplete);
+        $overallGrade = self::calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete, $finalComplete, $classWeights);
         
         // Get grade points
         $midtermGradePoint = self::getGradePointFromDB($db, $midtermGrade);

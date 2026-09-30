@@ -329,7 +329,7 @@ if ($classId > 0) {
     <div id="statusMenu" class="status-menu"></div>
 
     <script src="assets/vendor/bootstrap.bundle.min.js"></script>
-     <script src="assets/js/grading.js?v=2"></script>
+     <script src="assets/js/grading.js?v=3"></script>
     <?php if ($classId > 0): ?>
     <script>
         document.getElementById('mobileToggle')?.addEventListener('click', function() {

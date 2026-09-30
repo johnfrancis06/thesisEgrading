@@ -44,7 +44,7 @@ async function renderGradingTable(data, classId, period) {
     // Build perfect scores object from configs
     const perfectScores = {};
     configs.forEach(config => {
-        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const key = getComponentKey(config);
         perfectScores[key] = getCategoryPerfectScore(config);
     });
     
@@ -104,6 +104,15 @@ function getComponentKeyFromTemplate(templateId) {
     return templateMap[templateId] || `custom_${templateId}`;
 }
 
+// Single source of truth for the key used to address a category, on the client
+// and in GradingHelper::mapCategoryToComponent.
+function getComponentKey(config) {
+    if (!config) return '';
+    if (config.template_id) return getComponentKeyFromTemplate(config.template_id);
+    const name = config.custom_name || config.template_name || '';
+    return name.toLowerCase().replace(/\s+/g, '_');
+}
+
 function getCategoryPerfectScore(config) {
     return (config.items || []).reduce((total, item) => {
         return total + (parseFloat(item.max_score) || 0);
@@ -156,7 +165,7 @@ function buildDynamicHeader(configs) {
     
     configs.forEach(config => {
         const items = config.items || [];
-        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const key = getComponentKey(config);
         const weight = config.weight_percent;
         const maxWeight = weight;
         
@@ -210,24 +219,39 @@ function buildStudentRow(student, configs, period) {
     html += `<td class="col-student">${student.last_name}, ${student.first_name} ${student.middle_initial || ''}.</td>`;
     
     configs.forEach(config => {
-        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const key = getComponentKey(config);
         const compData = componentsData[key] || {};
         const items = config.items || [];
         const perfectScore = getCategoryPerfectScore(config);
         const weight = parseFloat(config.weight_percent) || 0;
         
+        // Match stored items to configured items by label first, then by position.
+        // Backend items can carry extra rows that no longer exist in the config.
+        const savedItems = Array.isArray(compData.items) ? compData.items : [];
+        const savedByLabel = new Map();
+        savedItems.forEach(item => {
+            if (item && item.label !== undefined) savedByLabel.set(String(item.label), item);
+        });
+        
         // Render item inputs
         items.forEach((item, idx) => {
-            const itemData = (Array.isArray(compData.items) ? compData.items[idx] : null) || { raw_score: '', max_score: 0, item_id: null };
-            const score = itemData.raw_score !== undefined && itemData.raw_score !== null ? itemData.raw_score : '';
+            const byLabel = savedByLabel.get(String(item.label));
+            const itemData = byLabel || savedItems[idx] || { raw_score: null, has_score: false, item_id: null };
             const maxScore = parseFloat(item.max_score) || parseFloat(itemData.max_score) || 100;
+            // Only show a value for items that actually have a recorded score,
+            // otherwise blank cells would look like real zeroes.
+            const hasScore = itemData.has_score === true || itemData.has_score === 1 || itemData.has_score === '1';
+            const score = hasScore && itemData.raw_score !== null && itemData.raw_score !== undefined
+                ? itemData.raw_score
+                : '';
             
             html += `<td class="cell-raw">
                 <input type="number" class="grade-input" 
                        data-item="${itemData.item_id || 'new'}" data-student="${student.id}" 
                        data-max="${maxScore}" data-component="${key}" 
-                       data-sub-idx="${idx}"
-                       value="${score !== '' ? score : ''}" 
+                       data-label="${escapeAttr(item.label)}"
+                       data-sub-idx="${idx}"${hasScore ? ' data-has-saved-score="1"' : ''}
+                       value="${score}" 
                        step="1" min="0" max="${maxScore}"
                        oninput="onGradeInput(this, ${student.id}, '${key}', ${idx})"
                        onchange="saveGradeInput(this)"
@@ -239,13 +263,13 @@ function buildStudentRow(student, configs, period) {
         const equivScore = perfectScore > 0 ? transmute(rawTotal, perfectScore) : 0;
         html += `<td class="cell-total cell-readonly">${rawTotal > 0 ? rawTotal : ''}</td>`;
         html += `<td class="cell-equiv cell-readonly">${rawTotal > 0 ? equivScore.toFixed(2) : ''}</td>`;
-        html += `<td class="cell-weight"><input type="number" class="weight-input" data-student="${student.id}" data-component="${key}" data-max-weight="100" value="${weight.toFixed(2)}" step="0.01" min="0" max="100" oninput="onWeightInput(this, ${student.id}, '${key}')" style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold;"></td>`;
+        html += `<td class="cell-weight"><input type="number" class="weight-input" data-student="${student.id}" data-component="${key}" data-max-weight="${weight}" value="${weight.toFixed(2)}" step="0.01" min="0" max="${weight}" oninput="onWeightInput(this, ${student.id}, '${key}')" style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold;"></td>`;
     });
     
     // Calculate initial weighted total for display
     let totalWeighted = 0;
     configs.forEach(config => {
-        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const key = getComponentKey(config);
         const compData = componentsData[key] || {};
         const perfectScore = getCategoryPerfectScore(config);
         const weight = config.weight_percent;
@@ -261,7 +285,16 @@ function buildStudentRow(student, configs, period) {
     html += `<td class="cell-remarks cell-readonly">${remarks}</td>`;
     
     html += '</tr>';
-return html;
+    return html;
+}
+
+function escapeAttr(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
 }
      
 const saveTimers = {};
@@ -271,8 +304,36 @@ async function saveGradeInput(input) {
     const studentId = parseInt(input.dataset.student, 10);
     if (!gradeItemId || !studentId) return;
 
+    const entered = String(input.value ?? '').trim();
+
+    // An empty cell means "not graded yet", so the stored score has to be removed
+    // instead of being written as a zero.
+    if (entered === '') {
+        if (!input.dataset.hasSavedScore) return;
+        try {
+            const resp = await fetch('api/index.php?action=clear_grade', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    item_id: gradeItemId,
+                    student_id: studentId
+                })
+            });
+            const data = await resp.json();
+            if (data.success) {
+                delete input.dataset.hasSavedScore;
+            } else {
+                console.error('Clear failed:', data.message);
+            }
+        } catch (e) {
+            console.error('Error clearing grade:', e);
+        }
+        return;
+    }
+
     const maxScore = parseFloat(input.dataset.max) || 100;
-    const rawScore = Math.min(Math.max(parseFloat(input.value) || 0, 0), maxScore);
+    const rawScore = Math.min(Math.max(parseFloat(entered) || 0, 0), maxScore);
     input.value = Math.round(rawScore);
 
     try {
@@ -287,18 +348,25 @@ async function saveGradeInput(input) {
             })
         });
         const data = await resp.json();
-        if (!data.success) console.error('Save failed:', data.message);
+        if (data.success) {
+            input.dataset.hasSavedScore = '1';
+        } else {
+            console.error('Save failed:', data.message);
+        }
     } catch (e) {
         console.error('Error saving grade:', e);
     }
 }
 
 function onGradeInput(input, studentId, componentKey, subIdx) {
-    // Clamp value to max
-    const maxScore = parseFloat(input.dataset.max) || 100;
-    let clamped = Math.min(Math.max(parseFloat(input.value) || 0, 0), maxScore);
-    clamped = Math.round(clamped);
-    input.value = clamped;
+    const entered = String(input.value ?? '').trim();
+
+    // Clamp only real entries; leave the field empty so it can be cleared.
+    if (entered !== '') {
+        const maxScore = parseFloat(input.dataset.max) || 100;
+        const clamped = Math.min(Math.max(parseFloat(entered) || 0, 0), maxScore);
+        input.value = Math.round(clamped);
+    }
     
     // Clear manual edit flag for this component so weight recalculates
     const row = document.querySelector(`tr[data-student="${studentId}"]`);
@@ -374,50 +442,6 @@ async function updateCategoryWeight(input) {
     }
 }
 
-function updateWeightFromEquiv(studentId, componentKey) {
-    const row = document.querySelector(`tr[data-student="${studentId}"]`);
-    if (!row) return;
-    
-    const equivCells = row.querySelectorAll('.cell-equiv.cell-readonly');
-    const configs = window.currentCategoryConfigs || [];
-    
-    let compIdx = -1;
-    let maxWeight = 30;
-    
-    if (configs.length > 0) {
-        configs.forEach((config, idx) => {
-            const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
-            if (key === componentKey) {
-                compIdx = idx;
-                maxWeight = config.weight_percent;
-            }
-        });
-    } else {
-        // Fallback
-        const compOrder = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
-        compIdx = compOrder.indexOf(componentKey);
-        const maxWeights = {
-            'class_participation': 20,
-            'problem_set': 20,
-            'quizzes': 30,
-            'periodical_exam': 30
-        };
-        maxWeight = maxWeights[componentKey] || 30;
-    }
-    
-    if (compIdx >= 0 && equivCells[compIdx]) {
-        const equivText = equivCells[compIdx].textContent;
-        const equiv = parseFloat(equivText) || 0;
-        
-        const autoWeight = equiv > 0 ? (equiv / 100) * maxWeight : 0;
-        
-        const weightInput = row.querySelector(`input.weight-input[data-component="${componentKey}"]`);
-        if (weightInput && !weightInput.dataset.manuallyEdited) {
-            weightInput.value = autoWeight.toFixed(2);
-        }
-    }
-}
-
 function calculateRowGrades(studentId) {
     // Get perfect scores from global (set by renderGradingTable)
     const perfectScores = window.currentPerfectScores || {};
@@ -430,7 +454,7 @@ function calculateRowGrades(studentId) {
     // Get configured weights from configs (not editable inputs)
     const weights = {};
     configs.forEach(config => {
-        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const key = getComponentKey(config);
         weights[key] = parseFloat(config.weight_percent) / 100 || 0;
     });
     
@@ -438,18 +462,23 @@ function calculateRowGrades(studentId) {
     const componentDetails = {};
     
     configs.forEach(config => {
-        const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+        const key = getComponentKey(config);
         const perfectScore = perfectScores[key] || getCategoryPerfectScore(config) || 100;
         
         let total = 0;
         const items = [];
         let hasAnyScore = false;
         
+        const weightInput = document.querySelector(
+            `tr[data-student="${studentId}"] input.weight-input[data-component="${key}"]`
+        );
+        
         const inputs = document.querySelectorAll(`input.grade-input[data-student="${studentId}"][data-component="${key}"]`);
         inputs.forEach((input, idx) => {
-            const score = parseFloat(input.value) || 0;
+            const raw = String(input.value ?? '').trim();
+            const hasScore = raw !== '';
+            const score = hasScore ? (parseFloat(raw) || 0) : 0;
             const maxScore = parseFloat(input.dataset.max) || 100;
-            const hasScore = input.value !== '' && input.value !== null && input.value !== undefined;
             total += score;
             
             items.push({
@@ -463,6 +492,7 @@ function calculateRowGrades(studentId) {
         });
         
         const equivScore = perfectScore > 0 ? transmute(total, perfectScore) : 0;
+        const configuredWeight = weights[key] * 100;
         
         componentDetails[key] = {
             items: items,
@@ -475,7 +505,10 @@ function calculateRowGrades(studentId) {
             equiv: equivScore,
             hasAnyScore: hasAnyScore,
             perfectScore: perfectScore,
-            configuredWeight: weights[key] * 100
+            configuredWeight: configuredWeight,
+            // Earned weight for this component, e.g. 90 equivalent x 20% = 18%
+            weight: hasAnyScore ? (equivScore / 100) * configuredWeight : 0,
+            isManuallyEdited: weightInput ? weightInput.dataset.manuallyEdited === 'true' : false
         };
     });
     
@@ -486,22 +519,12 @@ function calculateRowGrades(studentId) {
     // Calculate grade point
     const gradePoint = getGradePoint(periodGrade);
     
-    // Check completeness for this period
-    const urlParams = new URLSearchParams(window.location.search);
-    const currentPeriod = urlParams.get('period') || 'midterm';
-    
-    const completeness = checkPeriodCompleteness(
-        Object.fromEntries(Object.entries(componentDetails).map(([k, v]) => [k, {
-            complete: v.items.length > 0 && v.items.every(item => item.has_score),
-            missing_items: v.items.filter(item => !item.has_score).map(item => item.label),
-            configured: v.items.length > 0,
-            total_items: v.items.length,
-            scored_items: v.items.filter(item => item.has_score).length
-        }])),
-        currentPeriod
+    // A period is only complete when every configured item carries a score.
+    // Component keys here are per-period, so check them directly instead of going
+    // through checkPeriodCompleteness(), which expects a period-keyed map.
+    const isComplete = Object.values(componentDetails).every(detail =>
+        detail.items.length > 0 && detail.items.every(item => item.has_score)
     );
-    
-    const isComplete = completeness.complete;
     const isDropped = false;
     
     const remarks = getRemarks(gradePoint, isComplete, isDropped);
@@ -524,7 +547,7 @@ function updateComputedCells(studentId, allComponentData, periodGrade, configs, 
     // Use configs order instead of hardcoded compOrder
     if (configs && configs.length > 0) {
         configs.forEach((config, idx) => {
-            const key = config.template_id ? getComponentKeyFromTemplate(config.template_id) : config.custom_name.toLowerCase().replace(/\s+/g, '_');
+            const key = getComponentKey(config);
             const data = allComponentData[key];
             if (!data) return;
             

@@ -1,0 +1,17 @@
+{
+    "name": "csu/thesis-egrading",
+    "description": "Thesis E-Grading System - grade sheet reporting and exports",
+    "type": "project",
+    "require": {
+        "php": ">=7.4",
+        "ext-mbstring": "*",
+        "ext-dom": "*",
+        "ext-gd": "*",
+        "ext-zip": "*",
+        "dompdf/dompdf": "^3.1",
+        "phpoffice/phpword": "^0.18"
+    },
+    "config": {
+        "optimize-autoloader": true
+    }
+}

@@ -6,6 +6,8 @@ error_reporting(E_ALL);
 require_once '../config/db.php';
 require_once '../includes/helpers.php';
 require_once '../includes/auth.php';
+require_once '../includes/gradesheet_data.php';
+require_once '../includes/gradesheet_template.php';
 
 $auth->requireLogin();
 header('Content-Type: application/json');
@@ -510,10 +512,28 @@ try {
             echo ResponseAPI::error("Failed to create class: " . $e->getMessage(), 500);
         }
     }
+    elseif ($action === 'get_student_filter_options') {
+        // Filter options must come from the same source that produces the student
+        // rows. Building them from section_student leaves faculty without enrollment
+        // records with permanently empty Year/Section dropdowns.
+        $optionsStmt = $db->prepare("
+            SELECT DISTINCT cs.course_program, cs.year_level, cs.section, cs.academic_year,
+                   sub.code AS subject_code, sub.title AS subject_title
+            FROM class_section cs
+            JOIN subject sub ON cs.subject_id = sub.id
+            JOIN student st ON st.class_section_id = cs.id
+            WHERE cs.faculty_id = ?
+            ORDER BY cs.year_level, cs.section, sub.code
+        ");
+        $optionsStmt->bind_param("i", $faculty_id);
+        $optionsStmt->execute();
+        echo ResponseAPI::success($optionsStmt->get_result()->fetch_all(MYSQLI_ASSOC));
+    }
     elseif ($action === 'get_students') {
         $classId = intval($_GET['class_id'] ?? 0);
-        $yearLevel = $_GET['year_level'] ?? '';
+        $yearLevel = intval($_GET['year_level'] ?? 0);
         $section = $_GET['section'] ?? '';
+        $subject = $_GET['subject'] ?? '';
         
         if ($classId > 0) {
             $stmt = $db->prepare("SELECT * FROM student WHERE class_section_id = ? ORDER BY last_name");
@@ -527,7 +547,7 @@ try {
             $params = [$faculty_id];
             $types = "i";
             
-            if (!empty($yearLevel)) {
+            if ($yearLevel > 0) {
                 $query .= " AND cs.year_level = ?";
                 $params[] = $yearLevel;
                 $types .= "i";
@@ -537,8 +557,13 @@ try {
                 $params[] = $section;
                 $types .= "s";
             }
+            if (!empty($subject)) {
+                $query .= " AND sub.code = ?";
+                $params[] = $subject;
+                $types .= "s";
+            }
             
-            $query .= " ORDER BY cs.academic_year DESC, cs.year_level, cs.section, s.last_name";
+            $query .= " ORDER BY cs.year_level, cs.section, cs.academic_year DESC, s.last_name, s.first_name";
             $stmt = $db->prepare($query);
             bindDynamicParams($stmt, $types, $params);
         }
@@ -605,6 +630,21 @@ try {
         $stmt->bind_param("iid", $itemId, $studentId, $rawScore);
         echo $stmt->execute() ? ResponseAPI::success([], "Grade saved") 
             : ResponseAPI::error("Failed to save grade");
+    }
+    elseif ($action === 'clear_grade') {
+        $data = json_decode(file_get_contents("php://input"), true);
+        $itemId = intval($data['item_id'] ?? $data['grade_item_id'] ?? 0);
+        $studentId = intval($data['student_id'] ?? 0);
+
+        if ($itemId <= 0 || $studentId <= 0) {
+            echo ResponseAPI::error("Invalid grade item or student");
+            exit;
+        }
+
+        $stmt = $db->prepare("DELETE FROM grade_score WHERE grade_item_id = ? AND student_id = ?");
+        $stmt->bind_param("ii", $itemId, $studentId);
+        echo $stmt->execute() ? ResponseAPI::success([], "Grade cleared")
+            : ResponseAPI::error("Failed to clear grade");
     }
     elseif ($action === 'add_category') {
         $data = json_decode(file_get_contents("php://input"), true);
@@ -1759,8 +1799,10 @@ try {
         
         if ($format === 'xlsx' || $format === 'excel') {
             generateAttendanceExcel($db, $class, $students, $sessions);
+        } elseif ($format === 'doc' || $format === 'word') {
+            generateAttendanceDoc($db, $class, $students, $sessions);
         } else {
-            generateAttendanceCSV($db, $class, $students, $sessions);
+            generateAttendancePdf($db, $class, $students, $sessions);
         }
     }
     // GE-104 Grading System Endpoints
@@ -1896,6 +1938,82 @@ try {
         } else {
             generateGradingSheetPdf($class, $gradesData);
         }
+    }
+    // Rebuildable GRADE SHEET preview + editor persistence.
+    elseif ($action === 'render_gradesheet') {
+        $classId = intval($_GET['class_id'] ?? 0);
+        $facultyName = $_SESSION['faculty_name'] ?? '';
+
+        $sheetData = gradesheet_load($db, $classId, $facultyName);
+        if (!$sheetData) {
+            header('Content-Type: text/plain; charset=UTF-8');
+            http_response_code(404);
+            echo 'Class not found.';
+            exit;
+        }
+
+        header('Content-Type: text/html; charset=UTF-8');
+        echo gradesheet_render($sheetData);
+    }
+    elseif ($action === 'save_report_settings') {
+        $classId = intval($_POST['class_id'] ?? $_GET['class_id'] ?? 0);
+        $payload = json_decode(file_get_contents("php://input"), true);
+        $fields = $payload['fields'] ?? [];
+
+        if ($classId <= 0 || !is_array($fields) || empty($fields)) {
+            echo ResponseAPI::error("Invalid class or no fields supplied");
+            exit;
+        }
+
+        // Only the class owner may change a class report.
+        $owner = $db->prepare("SELECT faculty_id FROM class_section WHERE id = ?");        $owner->bind_param('i', $classId);
+        $owner->execute();
+        $ownerRow = $owner->get_result()->fetch_assoc();
+        if (!$ownerRow) {
+            echo ResponseAPI::error("Class not found");
+            exit;
+        }
+        if (intval($ownerRow['faculty_id']) !== intval($faculty_id)) {
+            echo ResponseAPI::error("Not authorised for this class");
+            exit;
+        }
+
+        $upsert = $db->prepare("INSERT INTO report_settings
+                                (class_section_id, field_key, field_value, updated_by)
+                                VALUES (?, ?, ?, ?)
+                                ON DUPLICATE KEY UPDATE
+                                    field_value = VALUES(field_value),
+                                    updated_by = VALUES(updated_by),
+                                    updated_at = CURRENT_TIMESTAMP");
+
+        // Metadata keys are a fixed allowlist; cell keys must look like cell:<id>:<column>.
+        $metaAllowlist = array_keys(gradesheet_defaults([
+            'code' => '', 'title' => '', 'course_program' => '',
+            'year_level' => '', 'section' => '', 'academic_year' => '', 'semester' => 1,
+        ]));
+
+        $saved = 0;
+        $skipped = 0;
+        foreach ($fields as $key => $value) {
+            $key = trim((string)$key);
+            $isMeta = in_array($key, $metaAllowlist, true);
+            $isCell = (bool)preg_match('/^cell:\d+:[a-z_]+$/', $key);
+            if (!$isMeta && !$isCell) {
+                $skipped++;
+                continue;
+            }
+            $value = is_scalar($value) ? trim((string)$value) : '';
+            $value = mb_substr($value, 0, 2000);
+            $upsert->bind_param('issi', $classId, $key, $value, $faculty_id);
+            if ($upsert->execute()) {
+                $saved++;
+            }
+        }
+
+        echo ResponseAPI::success(
+            ['saved' => $saved, 'skipped' => $skipped],
+            $saved > 0 ? 'Report changes saved' : 'Nothing to save'
+        );
     }
     elseif ($action === 'save_grading_sheet_template') {
         $classId = intval($_POST['class_id'] ?? $_GET['class_id'] ?? 0);
@@ -2284,18 +2402,49 @@ function syncGradeTables($db, $classId, $period) {
     
     // Remove categories that no longer exist in config
     $existingConfigIds = array_column($configs, 'id');
-    if (!empty($existingConfigIds)) {
-        $placeholders = implode(',', array_fill(0, count($existingConfigIds), '?'));
-        $types = str_repeat('i', count($existingConfigIds));
-        $params = array_merge([$classId, $period], $existingConfigIds);
-        $stmt = $db->prepare("DELETE FROM grade_category WHERE class_section_id = ? AND period = ? AND config_id NOT IN ($placeholders)");
-        bindDynamicParams($stmt, "is$types", $params);
-        $stmt->execute();
-    } else {
-        $stmt = $db->prepare("DELETE FROM grade_category WHERE class_section_id = ? AND period = ?");
-        $stmt->bind_param("is", $classId, $period);
-        $stmt->execute();
+    removeUnsyncedCategories($db, $classId, $period, $existingConfigIds);
+}
+
+// Drop grade_category rows that are not backed by the active config set, keeping
+// the same "preserve recorded scores" rule already used for grade items.
+// `config_id NOT IN (...)` never matches legacy rows because SQL NULL comparison
+// yields NULL, so orphaned migration rows used to survive every sync and get
+// double counted alongside the synced categories.
+function removeUnsyncedCategories($db, $classId, $period, $configIds) {
+    $configIds = array_values(array_filter(array_map('intval', $configIds)));
+
+    $scopeSql = "gc.class_section_id = ? AND gc.period = ?";
+    $scopeParams = [$classId, $period];
+    $scopeTypes = 'is';
+
+    if (!empty($configIds)) {
+        $placeholders = implode(',', array_fill(0, count($configIds), '?'));
+        $scopeSql .= " AND (gc.config_id IS NULL OR gc.config_id NOT IN ($placeholders))";
+        $scopeParams = array_merge($scopeParams, $configIds);
+        $scopeTypes .= str_repeat('i', count($configIds));
     }
+
+    // Collect the categories about to be removed.
+    $findStmt = $db->prepare("SELECT gc.id FROM grade_category gc WHERE $scopeSql");
+    bindDynamicParams($findStmt, $scopeTypes, $scopeParams);
+    $findStmt->execute();
+    $categoryIds = array_column($findStmt->get_result()->fetch_all(MYSQLI_ASSOC), 'id');
+
+    if (empty($categoryIds)) {
+        return;
+    }
+
+    $categoryList = implode(',', array_map('intval', $categoryIds));
+
+    // Detach items that already carry student scores so nothing is lost.
+    $db->query("UPDATE grade_item SET item_config_id = NULL, grade_category_id = NULL
+        WHERE grade_category_id IN ($categoryList)
+        AND id IN (SELECT DISTINCT grade_item_id FROM grade_score)");
+
+    // The rest of the items go with their category.
+    $db->query("DELETE FROM grade_item WHERE grade_category_id IN ($categoryList)");
+
+    $db->query("DELETE FROM grade_category WHERE id IN ($categoryList)");
 }
 
 function removeSyncedConfigRows($db, $configIds) {
@@ -2437,6 +2586,127 @@ function generateAttendanceCSV($db, $class, $students, $sessions) {
 
 function generateAttendanceExcel($db, $class, $students, $sessions) {
     generateAttendanceCSV($db, $class, $students, $sessions);
+}
+
+// Printable A4 attendance report. Every session becomes a column, so this uses
+// landscape to keep the columns legible; a portrait sheet would squeeze them.
+// The PDF and Word versions share this builder so they cannot drift apart.
+function attendanceSheetHtml($db, $class, $students, $sessions) {
+    $code = htmlspecialchars($class['code'] ?? '', ENT_QUOTES, 'UTF-8');
+    $title = htmlspecialchars($class['title'] ?? '', ENT_QUOTES, 'UTF-8');
+    $program = htmlspecialchars($class['course_program'] ?? '', ENT_QUOTES, 'UTF-8');
+    $year = htmlspecialchars($class['year_level'] ?? '', ENT_QUOTES, 'UTF-8');
+    $section = htmlspecialchars($class['section'] ?? '', ENT_QUOTES, 'UTF-8');
+    $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
+    $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
+
+    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $footerPath = __DIR__ . '/../assets/images/footer.png';
+    $logoSrc = file_exists($logoPath)
+        ? '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath)
+        : '';
+    $footerSrc = file_exists($footerPath)
+        ? '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath)
+        : '';
+
+    $rowsPerPage = 25;
+    $totalPages = max(1, (int)ceil(count($students) / $rowsPerPage));
+
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Attendance - ' . $code . '</title><style>
+        @page { size: A4 landscape; margin: 0; }
+        body { font-family: Arial, sans-serif; font-size: 9pt; color: #000; margin: 0; }
+        .page {
+            width: 297mm; min-height: 210mm; margin: 0 auto 12mm; padding: 12mm;
+            box-sizing: border-box; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.25);
+            display: flex; flex-direction: column; overflow: hidden;
+            break-after: page; page-break-after: always;
+        }
+        .page > * { flex: 0 0 auto; }
+        .page:last-child { break-after: auto; page-break-after: auto; }
+        @media print { .page { margin: 0; box-shadow: none; } }
+        .header-image { width: 100%; height: auto; margin-bottom: 8px; display: block; }
+        .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 10pt; }
+        .course-info-left, .course-info-right { display: flex; flex-direction: column; gap: 2px; }
+        .course-info-right { text-align: right; }
+        .course-info strong { font-weight: bold; }
+        .attendance { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .attendance th, .attendance td { border: 1px solid #000; padding: 2px 3px; text-align: center; font-size: 8pt; }
+        .attendance th { background: #d9d9d9; font-weight: bold; }
+        .attendance .name { text-align: left; }
+        .footer-image { width: 100%; height: auto; margin-top: auto; padding-top: 12px; display: block; break-inside: avoid; page-break-inside: avoid; }
+    </style></head><body>';
+
+    for ($page = 0; $page < $totalPages; $page++) {
+        $html .= '<div class="page">';
+        if ($logoSrc) {
+            $html .= '<img class="header-image" src="' . $logoSrc . '" alt="University Header">';
+        }
+        $html .= '<div class="course-info">';
+        $html .= '<div class="course-info-left"><span><strong>Course Number:</strong> ' . $code . '</span><span><strong>Course Title:</strong> ' . $title . '</span></div>';
+        $html .= '<div class="course-info-right"><span><strong>' . $semester . ' Semester/Semester AY ' . $academicYear . '</strong></span><span><strong>Course and Year:</strong> ' . $program . ' ' . $year . '-' . $section . '</span></div>';
+        $html .= '</div>';
+
+        $html .= '<table class="attendance"><thead><tr>';
+        $html .= '<th style="width:8%">Student No</th><th style="width:16%">Last Name</th><th style="width:12%">First Name</th>';
+        foreach ($sessions as $session) {
+            $label = htmlspecialchars($session['label'] ?? '', ENT_QUOTES, 'UTF-8');
+            $html .= '<th>' . htmlspecialchars($session['date'], ENT_QUOTES, 'UTF-8')
+                . ($label !== '' ? '<br><small>' . $label . '</small>' : '') . '</th>';
+        }
+        $html .= '<th>Present</th><th>Absent</th><th>Late</th><th>Excused</th><th>Sessions</th><th>Rate %</th>';
+        $html .= '</tr></thead><tbody>';
+
+        $startIdx = $page * $rowsPerPage;
+        $endIdx = min($startIdx + $rowsPerPage, count($students));
+        for ($i = $startIdx; $i < $endIdx; $i++) {
+            $student = $students[$i];
+            $present = 0; $absent = 0; $late = 0; $excused = 0;
+
+            $html .= '<tr><td>' . htmlspecialchars($student['student_no'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $html .= '<td class="name">' . htmlspecialchars($student['last_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+            $html .= '<td class="name">' . htmlspecialchars($student['first_name'], ENT_QUOTES, 'UTF-8') . '</td>';
+
+            foreach ($sessions as $session) {
+                $record = $db->query("SELECT status FROM attendance_record
+                    WHERE attendance_session_id = " . intval($session['id']) . "
+                    AND student_id = " . intval($student['id']))->fetch_assoc();
+                $status = $record ? $record['status'] : '';
+                if ($status === 'present') $present++;
+                elseif ($status === 'absent') $absent++;
+                elseif ($status === 'late') $late++;
+                elseif ($status === 'excused') $excused++;
+
+                $html .= '<td>' . ($status !== '' ? htmlspecialchars(ucfirst($status), ENT_QUOTES, 'UTF-8') : '') . '</td>';
+            }
+
+            $total = count($sessions);
+            $rate = $total > 0 ? round((($present + $late) / $total) * 100, 1) : 0;
+            $html .= '<td>' . $present . '</td><td>' . $absent . '</td><td>' . $late . '</td>';
+            $html .= '<td>' . $excused . '</td><td>' . $total . '</td><td>' . $rate . '</td></tr>';
+        }
+        $html .= '</tbody></table>';
+
+        if ($footerSrc) {
+            $html .= '<img class="footer-image" src="' . $footerSrc . '" alt="Footer">';
+        }
+        $html .= '</div>';
+    }
+
+    return $html . '</body></html>';
+}
+
+// Printable attendance report: browser print-to-PDF.
+function generateAttendancePdf($db, $class, $students, $sessions) {
+    $html = attendanceSheetHtml($db, $class, $students, $sessions);
+    echo str_replace('</body>', '<script>window.onload = function() { window.print(); };</script></body>', $html);
+}
+
+// Downloadable Word attendance report (Word HTML, matching the grading sheet DOC export).
+function generateAttendanceDoc($db, $class, $students, $sessions) {
+    header('Content-Type: application/msword; charset=UTF-8');
+    header('Content-Disposition: attachment; filename="Attendance_'
+        . preg_replace('/[^a-z0-9_-]+/i', '_', $class['code'] ?? 'report') . '.doc"');
+    echo attendanceSheetHtml($db, $class, $students, $sessions);
 }
 
 // ==========================================
@@ -2873,6 +3143,58 @@ function generateGradingSheetExcel($class, $gradesData) {
     fclose($output);
 }
 
+// Shared A4 stylesheet for the grading sheet preview and the printable export.
+// Each .page is a real 210mm x 297mm sheet so the on-screen preview matches what
+// the printer produces. Kept in one place so the two never drift apart.
+function gradingSheetPageCss() {
+    return '
+        @page { size: A4 portrait; margin: 0; }
+        body { font-family: Arial, sans-serif; font-size: 10pt; color: #000; margin: 0; }
+        .page {
+            width: 210mm;
+            min-height: 297mm;
+            margin: 0 auto 12mm;
+            padding: 15mm;
+            box-sizing: border-box;
+            background: #fff;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.25);
+            display: flex;
+            flex-direction: column;
+            /* A sheet that fits stays exactly A4 and can never split, so the
+               footer image cannot be pushed onto a second page by sub-pixel
+               rounding. If content ever exceeds the sheet the box grows instead
+               of clipping, so nothing is silently lost. */
+            overflow: hidden;
+            break-after: page;
+            page-break-after: always;
+        }
+        .page > * { flex: 0 0 auto; }
+        .page:last-child { break-after: auto; page-break-after: auto; }
+        /* Screen styling is scoped to the preview container so it never bleeds
+           into the surrounding application page. */
+        @media screen {
+            #classRecordPreview { background: #e9ecef; padding: 16mm 12px; overflow-x: auto; }
+        }
+        @media print {
+            #classRecordPreview { background: #fff; padding: 0; overflow: visible; }
+            .page { margin: 0; box-shadow: none; }
+        }
+        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
+        .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
+        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
+        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
+        .course-info strong { font-weight: bold; }
+        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; }
+        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
+        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+        /* auto margin pins the footer to the bottom of its own sheet. */
+        .footer-image { width: 100%; max-width: 100%; height: auto; margin-top: auto; padding-top: 20px; display: block; break-inside: avoid; page-break-inside: avoid; }
+    ';
+}
+
 function generateGradingSheetPdf($class, $gradesData) {
     $html = gradingSheetHtml($class, $gradesData, false);
     // Add auto-print script for browser print-to-PDF
@@ -2906,7 +3228,7 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
         $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
     }
 
-    $studentsPerPage = 20;
+    $studentsPerPage = GRADING_SHEET_STUDENTS_PER_PAGE;
     $totalStudents = count($gradesData);
     $totalPages = ceil($totalStudents / $studentsPerPage);
 
@@ -2914,23 +3236,9 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
     $logoSrc = $logoPublicUrl;
     $footerSrc = $footerPublicUrl;
 
-    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . $code . '</title><style>
-        @page { size: A4; margin: 15mm; }
-        body { font-family: Arial, sans-serif; font-size: 10px; color: #000; margin: 0; }
-        .page { page-break-after: always; min-height: 100vh; padding: 20px; box-sizing: border-box; }
-        .page:last-child { page-break-after: auto; }
-        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
-        .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
-        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
-        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
-        .course-info strong { font-weight: bold; }
-        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; }
-        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
-        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
-        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
-        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
-    </style></head><body>';
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . $code . '</title><style>'
+        . gradingSheetPageCss()
+        . '</style></head><body>';
 
     for ($page = 0; $page < $totalPages; $page++) {
         $html .= '<div class="page">';
@@ -2959,7 +3267,7 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
         }
         $html .= '</tbody></table>';
         if ($footerSrc) {
-            $html .= '<img class="footer-image" src="' . $footerSrc . '" alt="Footer" style="width: 100%; max-width: 100%; height: auto; margin-top: 20px; display: block;">';
+            $html .= '<img class="footer-image" src="' . $footerSrc . '" alt="Footer">';
         }
         $html .= '</div>';
     }
@@ -3174,28 +3482,13 @@ function exportGradingSheetPdf($templateId) {
         $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
     }
     
-    $studentsPerPage = $template['students_per_page'] ?? 20;
+    $studentsPerPage = intval($template['students_per_page'] ?? 0) ?: GRADING_SHEET_STUDENTS_PER_PAGE;
     $totalItems = count($items);
     $totalPages = ceil($totalItems / $studentsPerPage);
     
-    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . htmlspecialchars($template['course_number']) . '</title><style>
-        @page { size: A4; margin: 15mm; }
-        body { font-family: Arial, sans-serif; font-size: 10px; color: #000; margin: 0; }
-        .page { page-break-after: always; min-height: 100vh; padding: 20px; box-sizing: border-box; }
-        .page:last-child { page-break-after: auto; }
-        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
-        .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
-        .course-info-left { display: flex; flex-direction: column; gap: 2px; }
-        .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
-        .course-info strong { font-weight: bold; }
-        .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; }
-        .grade-sheet th { background: #d9d9d9; font-weight: bold; }
-        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
-        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
-        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
-        .footer-image { width: 100%; max-width: 100%; height: auto; margin-top: 20px; display: block; }
-    </style></head><body>';
+    $html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Grade Sheet - ' . htmlspecialchars($template['course_number']) . '</title><style>'
+        . gradingSheetPageCss()
+        . '</style></head><body>';
     
     for ($page = 0; $page < $totalPages; $page++) {
         $html .= '<div class="page">';
