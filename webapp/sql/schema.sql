@@ -102,10 +102,17 @@ CREATE TABLE IF NOT EXISTS attendance_session (
     id INT PRIMARY KEY AUTO_INCREMENT,
     class_section_id INT NOT NULL,
     date DATE NOT NULL,
+    session_type ENUM('regular', 'holiday', 'seminar') NOT NULL DEFAULT 'regular',
+    period TINYINT(1) NOT NULL DEFAULT 1,
+    is_completed TINYINT(1) NOT NULL DEFAULT 0,
+    completed_at DATETIME NULL,
     label VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (class_section_id) REFERENCES class_section(id),
-    INDEX idx_class_date (class_section_id, date)
+    INDEX idx_class_date (class_section_id, date),
+    -- The class record prints one Attendance Sheet block per period, so the
+    -- sessions of a class are read in period then date order.
+    INDEX idx_class_period (class_section_id, period, date)
 );
 
 CREATE TABLE IF NOT EXISTS attendance_record (

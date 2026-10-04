@@ -23,7 +23,7 @@ if ($classId > 0) {
     <title><?= $classId > 0 ? 'Monthly Attendance Sheet - ' . APP_NAME : 'Select a Class - ' . APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=8">
+    <link rel="stylesheet" href="assets/css/style.css?v=17">
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         .sheet-title {
@@ -128,19 +128,20 @@ if ($classId > 0) {
                         <button class="btn btn-sm btn-outline-primary" onclick="showAttendanceConfig()">
                             <i class="bi bi-gear"></i> Settings
                         </button>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="window.print()">
-                            <i class="bi bi-printer"></i> Print
+                        <button class="btn btn-sm btn-outline-dark" onclick="showClassRecord()" title="Open the class record form for printing">
+                            <i class="bi bi-file-earmark-text"></i> Class Record
                         </button>
                     </div>
                 </div>
                 
-                <!-- Attendance Grid -->
-                <div class="sheet-grid-wrapper">
+                <!-- Grid plus the per-month overview panel -->
+                <div class="attendance-layout">
+                    <!-- Attendance Grid -->
+                    <div class="sheet-grid-wrapper">
                     <table class="sheet-grid" id="attendanceGrid">
                         <thead id="attendanceGridHead">
                             <tr>
                                 <th class="col-student">STUDENT NAME</th>
-                                <th class="col-roll">ROLL NO.</th>
                             </tr>
                         </thead>
                         <tbody id="attendanceGridBody">
@@ -155,10 +156,91 @@ if ($classId > 0) {
                                     <span class="legend-item late">L = Late</span>
                                     <span class="legend-item excused">E = Excused</span>
                                     <span class="legend-item unmarked">– = Unmarked</span>
+                                    <span class="legend-item" style="color:#9f1239;">&#9632; = Holiday</span>
+                                    <span class="legend-item" style="color:#5b21b6;">&#9632; = Seminar</span>
+                                    <span class="legend-item text-muted">Mark only the absentees, then press that day's <strong>Save</strong> &mdash; everyone left unmarked is marked present.</span>
+                                    <span class="legend-item text-muted">Click a date heading to mark it a holiday or seminar.</span>
                                 </td>
                             </tr>
                         </tfoot>
                     </table>
+                    </div>
+
+                    <!-- Month overview -->
+                    <aside class="month-overview" id="monthOverview" aria-label="Month overview">
+                        <div class="month-overview-head">
+                            <h6 class="month-overview-title">
+                                <i class="bi bi-bar-chart-line me-1"></i>Month Overview
+                            </h6>
+                            <button type="button" class="month-overview-toggle" id="monthOverviewToggle"
+                                    aria-expanded="true" aria-controls="monthOverviewBody"
+                                    title="Minimise the overview to free up space">
+                                <i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+
+                        <!-- Compact rail shown while minimised -->
+                        <div class="month-overview-mini" id="monthOverviewMini" aria-hidden="true">
+                            <div class="mini-stat">
+                                <i class="bi bi-pie-chart"></i>
+                                <span class="mini-value" id="ovMiniPercent">0%</span>
+                                <span class="mini-label">Attend</span>
+                            </div>
+                            <div class="mini-stat">
+                                <i class="bi bi-calendar-check"></i>
+                                <span class="mini-value" id="ovMiniMeets">0</span>
+                                <span class="mini-label">Meets</span>
+                            </div>
+                            <div class="mini-stat">
+                                <i class="bi bi-hand-thumbs-up"></i>
+                                <span class="mini-value" id="ovMiniAttended">0</span>
+                                <span class="mini-label">Attended</span>
+                            </div>
+                            <div class="mini-stat">
+                                <i class="bi bi-check2-square"></i>
+                                <span class="mini-value" id="ovMiniSaved">0</span>
+                                <span class="mini-label">Saved</span>
+                            </div>
+                        </div>
+
+                        <div id="monthOverviewBody">
+                        <div class="month-overview-stat">
+                            <span class="stat-label">Total Meets</span>
+                            <span class="stat-value" id="ovTotalMeets">0</span>
+                        </div>
+
+                        <div class="month-overview-stat">
+                            <span class="stat-label">Days Attended</span>
+                            <span class="stat-value" id="ovDaysRecorded">0</span>
+                        </div>
+
+                        <div class="month-overview-stat">
+                            <span class="stat-label">Attendance %</span>
+                            <span class="stat-value" id="ovPercent">0%</span>
+                        </div>
+
+                        <div class="month-overview-bar" role="img" aria-label="Attendance breakdown">
+                            <span class="seg present" id="ovSegPresent"></span>
+                            <span class="seg late" id="ovSegLate"></span>
+                            <span class="seg absent" id="ovSegAbsent"></span>
+                            <span class="seg excused" id="ovSegExcused"></span>
+                        </div>
+
+                        <ul class="month-overview-breakdown">
+                            <li><span class="key present"></span> Present <strong id="ovCountPresent">0</strong></li>
+                            <li><span class="key late"></span> Late <strong id="ovCountLate">0</strong></li>
+                            <li><span class="key absent"></span> Absent <strong id="ovCountAbsent">0</strong></li>
+                            <li><span class="key excused"></span> Excused <strong id="ovCountExcused">0</strong></li>
+                            <li><span class="key unmarked"></span> Unmarked <strong id="ovCountUnmarked">0</strong></li>
+                        </ul>
+
+                        <div class="month-overview-stat is-secondary">
+                            <span class="stat-label">Days Saved</span>
+                            <span class="stat-value" id="ovDaysSaved">0</span>
+                        </div>
+                        <p class="month-overview-hint">Total Meets counts the days already marked. Attendance % and each student's figure use those same days.</p>
+                        </div>
+                    </aside>
                 </div>
             </div>
             <?php else: ?>
@@ -200,13 +282,16 @@ if ($classId > 0) {
     <div id="statusMenu" class="status-menu"></div>
     
     <script src="assets/vendor/bootstrap.bundle.min.js"></script>
-    <script src="assets/js/attendance.js"></script>
+    <script src="assets/js/attendance.js?v=11"></script>
     <script>
         document.getElementById('mobileToggle')?.addEventListener('click', function() {
             document.getElementById('sidebar').classList.toggle('show');
             document.getElementById('sidebarOverlay').classList.toggle('show');
         });
         <?php if ($classId > 0): ?>
+        document.getElementById('monthOverviewToggle')
+            ?.addEventListener('click', function() { toggleMonthOverview(); });
+        restoreMonthOverviewState();
         loadAttendanceGrid(<?= $classId ?>, <?= date('Y') ?>, <?= date('n') ?>);
         <?php endif; ?>
     </script>

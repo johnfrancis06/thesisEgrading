@@ -8,6 +8,7 @@ require_once '../includes/helpers.php';
 require_once '../includes/auth.php';
 require_once '../includes/gradesheet_data.php';
 require_once '../includes/gradesheet_template.php';
+require_once '../includes/classrecord_data.php';
 
 $auth->requireLogin();
 header('Content-Type: application/json');
@@ -138,6 +139,11 @@ function updateAttendanceWeekdays($db, $classId, $weekdays) {
         return true;
     }
     return false;
+}
+
+/** The valid values for attendance_session.session_type. */
+function attendanceSessionTypes() {
+    return array('regular', 'holiday', 'seminar');
 }
 
 try {
@@ -954,16 +960,16 @@ try {
                 continue;
             }
             
-            $stmt = $db->prepare("INSERT INTO attendance_session (class_section_id, date, label) VALUES (?, ?, ?)");
+            $stmt = $db->prepare("INSERT INTO attendance_session (class_section_id, date, session_type, label) VALUES (?, ?, 'regular', ?)");
             $label = date('l, F j', strtotime($date));
             $stmt->bind_param("iss", $classId, $date, $label);
-            
+
             if ($stmt->execute()) {
                 $sessionId = $db->insert_id;
                 $students = $db->query("SELECT id FROM student WHERE class_section_id = $classId")->fetch_all(MYSQLI_ASSOC);
                 foreach ($students as $s) {
                     $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
-                    $stmt2->bind_param("ii", $sessionId, $s['id']);
+                    $stmt2->bind_param("is", $sessionId, $s['id']);
                     $stmt2->execute();
                 }
                 $created++;
@@ -994,21 +1000,191 @@ try {
     }
     elseif ($action === 'create_attendance_session') {
         $data = json_decode(file_get_contents("php://input"), true);
-        $stmt = $db->prepare("INSERT INTO attendance_session (class_section_id, date, label) VALUES (?, ?, ?)");
-        $stmt->bind_param("iss", $data['class_id'], $data['date'], $data['label']);
-        
+        $classId = intval($data['class_id'] ?? 0);
+        $date = $data['date'] ?? '';
+        $label = $data['label'] ?? '';
+        $requestedType = $data['session_type'] ?? 'regular';
+        $sessionType = in_array($requestedType, attendanceSessionTypes(), true) ? $requestedType : 'regular';
+
+        $stmt = $db->prepare("INSERT INTO attendance_session (class_section_id, date, session_type, label) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("isss", $classId, $date, $sessionType, $label);
+
         if ($stmt->execute()) {
             $sessionId = $db->insert_id;
-            $students = $db->query("SELECT id FROM student WHERE class_section_id = {$data['class_id']}")->fetch_all(MYSQLI_ASSOC);
+            // Every student starts unmarked; the teacher sets the statuses.
+            $students = $db->query("SELECT id FROM student WHERE class_section_id = $classId")->fetch_all(MYSQLI_ASSOC);
             foreach ($students as $s) {
                 $stmt2 = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
-                $stmt2->bind_param("ii", $sessionId, $s['id']);
+                $stmt2->bind_param("is", $sessionId, $s['id']);
                 $stmt2->execute();
             }
             echo ResponseAPI::success(['id' => $sessionId], "Session created", 201);
         } else {
             echo ResponseAPI::error("Failed to create session");
         }
+    }
+    elseif ($action === 'set_attendance_day_type') {
+        // Marks one date as regular / holiday / seminar, and stores the holiday or
+        // seminar name in attendance_session.label.
+        $data = json_decode(file_get_contents("php://input"), true);
+        $classId = intval($data['class_id'] ?? 0);
+        $date = $data['date'] ?? '';
+        $type = $data['session_type'] ?? 'regular';
+        $label = trim((string)($data['label'] ?? ''));
+
+        if ($classId <= 0 || !$date) {
+            echo ResponseAPI::error("Class and date are required");
+            exit;
+        }
+        if (!in_array($type, attendanceSessionTypes(), true)) {
+            echo ResponseAPI::error("Unknown day type");
+            exit;
+        }
+
+        $columnCheck = $db->query("SHOW COLUMNS FROM attendance_session LIKE 'session_type'");
+        if (!$columnCheck || $columnCheck->num_rows === 0) {
+            echo ResponseAPI::error("session_type column not yet migrated");
+            exit;
+        }
+
+        // The date must belong to this faculty's class.
+        $owner = $db->prepare("SELECT faculty_id FROM class_section WHERE id = ?");
+        $owner->bind_param("i", $classId);
+        $owner->execute();
+        $ownerRow = $owner->get_result()->fetch_assoc();
+        if (!$ownerRow) {
+            echo ResponseAPI::error("Class not found");
+            exit;
+        }
+        if (intval($ownerRow['faculty_id']) !== intval($faculty_id)) {
+            echo ResponseAPI::error("Not authorised for this class");
+            exit;
+        }
+
+        $existing = $db->prepare("SELECT id, label, session_type FROM attendance_session WHERE class_section_id = ? AND date = ?");
+        $existing->bind_param("is", $classId, $date);
+        $existing->execute();
+        $session = $existing->get_result()->fetch_assoc();
+
+        // A regular day carries no label, so clearing the type also clears the name.
+        $effectiveLabel = ($type === 'regular') ? '' : $label;
+
+        if ($session) {
+            $update = $db->prepare("UPDATE attendance_session SET session_type = ?, label = ? WHERE id = ?");
+            $update->bind_param("ssi", $type, $effectiveLabel, $session['id']);
+            if (!$update->execute()) {
+                echo ResponseAPI::error("Failed to update day");
+                exit;
+            }
+            $sessionId = $session['id'];
+        } else {
+            $insert = $db->prepare("INSERT INTO attendance_session (class_section_id, date, session_type, label) VALUES (?, ?, ?, ?)");
+            $insert->bind_param("isss", $classId, $date, $type, $effectiveLabel);
+            if (!$insert->execute()) {
+                echo ResponseAPI::error("Failed to create day");
+                exit;
+            }
+            $sessionId = $db->insert_id;
+
+            $students = $db->query("SELECT id FROM student WHERE class_section_id = $classId")->fetch_all(MYSQLI_ASSOC);
+            foreach ($students as $s) {
+                $stmt = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
+                $stmt->bind_param("is", $sessionId, $s['id']);
+                $stmt->execute();
+            }
+        }
+
+        logAudit($db, $faculty_id, 'set_attendance_day_type', 'attendance_session', $sessionId,
+            json_encode(['session_type' => $session['session_type'] ?? 'regular', 'label' => $session['label'] ?? '']),
+            json_encode(['session_type' => $type, 'label' => $effectiveLabel])
+        );
+
+        echo ResponseAPI::success([
+            'id' => $sessionId,
+            'date' => $date,
+            'session_type' => $type,
+            'label' => $effectiveLabel,
+        ], "Day updated");
+    }
+    elseif ($action === 'complete_attendance_day') {
+        // Finishes one attendance day. The teacher only marks the absentees while
+        // the day is open; saving it turns every student still left unmarked into
+        // present, then locks the day as complete.
+        $data = json_decode(file_get_contents("php://input"), true);
+        $sessionId = intval($data['session_id'] ?? 0);
+        $classId = intval($data['class_id'] ?? 0);
+        $date = $data['date'] ?? '';
+
+        if ($sessionId <= 0 && ($classId <= 0 || !$date)) {
+            echo ResponseAPI::error("Session or class and date are required");
+            exit;
+        }
+
+        if ($sessionId <= 0) {
+            $lookup = $db->prepare("SELECT id FROM attendance_session WHERE class_section_id = ? AND date = ?");
+            $lookup->bind_param("is", $classId, $date);
+            $lookup->execute();
+            $found = $lookup->get_result()->fetch_assoc();
+            if (!$found) {
+                echo ResponseAPI::error("No attendance session on that date");
+                exit;
+            }
+            $sessionId = intval($found['id']);
+        }
+
+        $owner = $db->prepare("SELECT ase.class_section_id, cs.faculty_id
+                               FROM attendance_session ase
+                               JOIN class_section cs ON cs.id = ase.class_section_id
+                               WHERE ase.id = ?");
+        $owner->bind_param("i", $sessionId);
+        $owner->execute();
+        $ownerRow = $owner->get_result()->fetch_assoc();
+        if (!$ownerRow) {
+            echo ResponseAPI::error("Session not found");
+            exit;
+        }
+        if (intval($ownerRow['faculty_id']) !== intval($faculty_id)) {
+            echo ResponseAPI::error("Not authorised for this class");
+            exit;
+        }
+
+        $sessionClassId = intval($ownerRow['class_section_id']);
+
+        // A student added after the day was first created has no record yet, so
+        // the day would silently omit them. Create the missing rows as present.
+        $insertMissing = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status)
+                                        SELECT ?, st.id, 'present'
+                                        FROM student st
+                                        WHERE st.class_section_id = ?
+                                          AND st.id NOT IN (SELECT student_id FROM attendance_record
+                                                             WHERE attendance_session_id = ?)");
+        $insertMissing->bind_param("iii", $sessionId, $sessionClassId, $sessionId);
+        $insertMissing->execute();
+        $inserted = $insertMissing->affected_rows;
+
+        // Anything the teacher never touched counts as present.
+        $fill = $db->prepare("UPDATE attendance_record SET status = 'present'
+                              WHERE attendance_session_id = ? AND (status IS NULL OR status = '')");
+        $fill->bind_param("i", $sessionId);
+        $fill->execute();
+        $filled = $fill->affected_rows;
+
+        $mark = $db->prepare("UPDATE attendance_session SET is_completed = 1, completed_at = NOW() WHERE id = ?");
+        $mark->bind_param("i", $sessionId);
+        if (!$mark->execute()) {
+            echo ResponseAPI::error("Failed to complete the day");
+            exit;
+        }
+
+        logAudit($db, $faculty_id, 'complete_attendance_day', 'attendance_session', $sessionId,
+            null, json_encode(['marked_present' => $filled, 'added_students' => $inserted])
+        );
+
+        echo ResponseAPI::success([
+            'session_id' => $sessionId,
+            'marked_present' => $filled,
+            'added_students' => $inserted,
+        ], $filled > 0 ? "Day saved, $filled student(s) marked present" : "Day saved");
     }
     elseif ($action === 'save_attendance') {
         $data = json_decode(file_get_contents("php://input"), true);
@@ -1017,7 +1193,18 @@ try {
         $remarks = $data['remarks'] ?? '';
         $sessionId = intval($data['session_id'] ?? 0);
         $studentId = intval($data['student_id'] ?? 0);
-        
+
+        // Editing any cell reopens its day, so the teacher is reminded to save it
+        // again before the remaining blanks become present.
+        function reopenAttendanceDay($db, $sessionId) {
+            if ($sessionId <= 0) return;
+            $stmt = $db->prepare("UPDATE attendance_session
+                                   SET is_completed = 0, completed_at = NULL
+                                   WHERE id = ? AND is_completed = 1");
+            $stmt->bind_param("i", $sessionId);
+            $stmt->execute();
+        }
+
         if ($recordId > 0) {
             $oldRecord = $db->query("SELECT ar.*, ase.class_section_id FROM attendance_record ar 
                 JOIN attendance_session ase ON ar.attendance_session_id = ase.id 
@@ -1026,8 +1213,9 @@ try {
             $stmt = $db->prepare("UPDATE attendance_record SET status = ?, remarks = ? WHERE id = ?");
             $stmt->bind_param("ssi", $status, $remarks, $recordId);
             $stmt->execute();
-            
+
             if ($stmt->execute() && $oldRecord) {
+                reopenAttendanceDay($db, intval($oldRecord['attendance_session_id']));
                 logAudit($db, $faculty_id, 'update_attendance', 'attendance_record', $recordId, 
                     json_encode(['status' => $oldRecord['status']]), 
                     json_encode(['status' => $status, 'remarks' => $remarks])
@@ -1040,7 +1228,8 @@ try {
             $stmt->bind_param("iiss", $sessionId, $studentId, $status, $remarks);
             $stmt->execute();
             $newRecordId = $db->insert_id;
-            
+
+            reopenAttendanceDay($db, $sessionId);
             logAudit($db, $faculty_id, 'create_attendance', 'attendance_record', $newRecordId,
                 null, json_encode(['status' => $status, 'remarks' => $remarks])
             );
@@ -1115,28 +1304,34 @@ try {
     elseif ($action === 'get_attendance_config') {
         $classId = intval($_GET['class_id']);
         $lateCounts = getAttendanceLateCountsPresent($db, $classId);
-        echo ResponseAPI::success(['attendance_late_counts_present' => $lateCounts ? 1 : 0]);
+        echo ResponseAPI::success([
+            'attendance_late_counts_present' => $lateCounts ? 1 : 0,
+        ]);
     }
     elseif ($action === 'update_attendance_config') {
         $data = json_decode(file_get_contents("php://input"), true);
         $classId = intval($data['class_id']);
         $lateCounts = isset($data['attendance_late_counts_present']) ? ($data['attendance_late_counts_present'] ? 1 : 0) : 0;
-        
+
         $columnCheck = $db->query("SHOW COLUMNS FROM class_section LIKE 'attendance_late_counts_present'");
         if ($columnCheck && $columnCheck->num_rows > 0) {
             $stmt = $db->prepare("UPDATE class_section SET attendance_late_counts_present = ? WHERE id = ?");
             $stmt->bind_param("ii", $lateCounts, $classId);
-            
+
             if ($stmt->execute()) {
                 logAudit($db, $faculty_id, 'update_attendance_config', 'class_section', $classId,
                     null, json_encode(['attendance_late_counts_present' => $lateCounts])
                 );
-                echo ResponseAPI::success(['attendance_late_counts_present' => $lateCounts], "Configuration updated");
+                echo ResponseAPI::success([
+                    'attendance_late_counts_present' => $lateCounts,
+                ], "Configuration updated");
             } else {
                 echo ResponseAPI::error("Failed to update configuration");
             }
         } else {
-            echo ResponseAPI::success(['attendance_late_counts_present' => 0], "Configuration updated (column not yet migrated)");
+            echo ResponseAPI::success([
+                'attendance_late_counts_present' => 0,
+            ], "Configuration updated (column not yet migrated)");
         }
     }
     elseif ($action === 'get_attendance_weekdays') {
@@ -1795,10 +1990,24 @@ try {
         $class = $db->query("SELECT cs.*, s.code, s.title FROM class_section cs 
             JOIN subject s ON cs.subject_id = s.id WHERE cs.id = $classId")->fetch_assoc();
         $students = $db->query("SELECT * FROM student WHERE class_section_id = $classId ORDER BY last_name")->fetch_all(MYSQLI_ASSOC);
-        $sessions = $db->query("SELECT * FROM attendance_session WHERE class_section_id = $classId ORDER BY date ASC")->fetch_all(MYSQLI_ASSOC);
-        
+
+        // An optional year/month limits the export to the sheet on screen, so the
+        // download matches what the teacher is looking at.
+        $year = intval($_GET['year'] ?? 0);
+        $month = intval($_GET['month'] ?? 0);
+        if ($year > 0 && $month > 0) {
+            $stmt = $db->prepare("SELECT * FROM attendance_session
+                                  WHERE class_section_id = ? AND YEAR(date) = ? AND MONTH(date) = ?
+                                  ORDER BY date ASC");
+            $stmt->bind_param("iii", $classId, $year, $month);
+            $stmt->execute();
+            $sessions = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+        } else {
+            $sessions = $db->query("SELECT * FROM attendance_session WHERE class_section_id = $classId ORDER BY date ASC")->fetch_all(MYSQLI_ASSOC);
+        }
+
         if ($format === 'xlsx' || $format === 'excel') {
-            generateAttendanceExcel($db, $class, $students, $sessions);
+            generateAttendanceExcel($db, $class, $students, $sessions, $year, $month);
         } elseif ($format === 'doc' || $format === 'word') {
             generateAttendanceDoc($db, $class, $students, $sessions);
         } else {
@@ -2014,6 +2223,161 @@ try {
             ['saved' => $saved, 'skipped' => $skipped],
             $saved > 0 ? 'Report changes saved' : 'Nothing to save'
         );
+    }
+    // CLASS RECORD (print attendance): read the sheet the print and PDF views render.
+    elseif ($action === 'get_class_record') {
+        $classId = intval($_GET['class_id'] ?? $_POST['class_id'] ?? 0);
+
+        $owner = $db->prepare("SELECT faculty_id FROM class_section WHERE id = ?");
+        $owner->bind_param('i', $classId);
+        $owner->execute();
+        $ownerRow = $owner->get_result()->fetch_assoc();
+        if (!$ownerRow) {
+            echo ResponseAPI::error('Class not found');
+            exit;
+        }
+        if (intval($ownerRow['faculty_id']) !== intval($faculty_id)) {
+            echo ResponseAPI::error('Not authorised for this class');
+            exit;
+        }
+
+        $data = classrecord_load($db, $classId, $_SESSION['faculty_name'] ?? '');
+        if (!$data) {
+            echo ResponseAPI::error('Class not found');
+            exit;
+        }
+
+        // Only the values the dialog needs: the editable fields and a quick
+        // summary so the split date can be explained before it is changed.
+        $periods = [];
+        foreach ($data['periods'] as $period) {
+            $periods[] = [
+                'label'      => $period['label'],
+                'dates'      => count($period['columns']),
+                'countable'  => $period['countable'],
+                'first'      => $period['columns'][0]['date'] ?? '',
+                'last'       => $period['columns'] ? $period['columns'][count($period['columns']) - 1]['date'] : '',
+            ];
+        }
+
+        echo ResponseAPI::success([
+            'meta'         => $data['meta'],
+            'periods'      => $periods,
+            'split_date'   => $data['split_date'],
+            'term_year'    => $data['term_year'],
+            'student_count' => count($data['rows']),
+            'fields'       => array_keys($data['meta']),
+        ]);
+    }
+    // CLASS RECORD settings: header wording, footer names, paper and period split.
+    elseif ($action === 'save_class_record_settings') {
+        $classId = intval($_POST['class_id'] ?? $_GET['class_id'] ?? 0);
+        $raw = file_get_contents("php://input");
+        $payload = json_decode($raw, true);
+        // An undecodable body must be an error, not an empty save: the dialog
+        // would report success and every field would silently be discarded.
+        if (!is_array($payload)) {
+            echo ResponseAPI::error('Could not read the settings: malformed request body');
+            exit;
+        }
+        $fields = $payload['fields'] ?? [];
+        if (!is_array($fields) || empty($fields)) {
+            echo ResponseAPI::error('No settings were supplied');
+            exit;
+        }
+
+        $owner = $db->prepare("SELECT faculty_id FROM class_section WHERE id = ?");
+        $owner->bind_param('i', $classId);
+        $owner->execute();
+        $ownerRow = $owner->get_result()->fetch_assoc();
+        if (!$ownerRow) {
+            echo ResponseAPI::error('Class not found');
+            exit;
+        }
+        if (intval($ownerRow['faculty_id']) !== intval($faculty_id)) {
+            echo ResponseAPI::error('Not authorised for this class');
+            exit;
+        }
+
+        // Fixed allowlist: every printable header/footer field plus the layout
+        // switches. Nothing else may be written under a report_settings key.
+        $allowlist = [
+            'course_number', 'course_title', 'semester_term', 'course_and_year',
+            'class_record_note', 'submitted_by',
+            'facilitator_name', 'program_chair', 'satellite_director',
+            'prog_coordinator', 'dean', 'registrar',
+            'cr_paper', 'cr_term_year', 'cr_period_split', 'cr_from_month',
+            'cr_to_month', 'cr_rotate_dates',
+        ];
+
+        $saved = 0;
+        foreach ($fields as $key => $value) {
+            $key = trim((string)$key);
+            if (!in_array($key, $allowlist, true)) {
+                continue;
+            }
+            $value = is_scalar($value) ? trim((string)$value) : '';
+            $value = mb_substr($value, 0, 2000);
+
+            if ($key === 'cr_paper') {
+                $value = strtolower($value) === 'a4' ? 'a4' : 'legal';
+            } elseif ($key === 'cr_term_year') {
+                // 0 keeps every year, which is only sensible for a class with one.
+                $value = max(0, intval($value));
+            } elseif ($key === 'cr_from_month' || $key === 'cr_to_month') {
+                // Only a real YYYY-MM is kept; this value is reused as a SQL date
+                // bound, so it has to be validated rather than stored as typed.
+                $value = classrecord_normalize_month($value);
+            } elseif ($key === 'cr_period_split') {
+                // Only a real date is accepted; anything else would silently move
+                // every column into one period.
+                $value = ($value !== '' && strtotime($value)) ? date('Y-m-d', strtotime($value)) : '';
+            }
+            classrecord_save_setting($db, $classId, $key, $value, $faculty_id);
+            $saved++;
+        }
+
+        // A new term year or split date has to be pushed onto the sessions
+        // themselves, otherwise the columns keep the periods of the old scope.
+        $termYear = 0;
+        $readSetting = function ($key) use ($db, $classId) {
+            $stmt = $db->prepare("SELECT field_value FROM report_settings
+                                  WHERE class_section_id = ? AND field_key = ?");
+            $stmt->bind_param('is', $classId, $key);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+            return $row['field_value'] ?? '';
+        };
+        if (array_key_exists('cr_term_year', $fields)) {
+            $termYear = max(0, intval($readSetting('cr_term_year')));
+        }
+        if (array_key_exists('cr_term_year', $fields) && $termYear === 0) {
+            // "Every year" has no single split, so clear the saved one and let the
+            // loader work it out from the full range.
+            classrecord_save_setting($db, $classId, 'cr_period_split', '');
+        }
+        if (array_key_exists('cr_period_split', $fields)
+            || array_key_exists('cr_term_year', $fields)
+            || array_key_exists('cr_from_month', $fields)
+            || array_key_exists('cr_to_month', $fields)) {
+            $split = $readSetting('cr_period_split');
+            if ($split !== '') {
+                // The period and term months narrow the split the same way they
+                // narrow the printed columns, and so do the class's meeting days, so
+                // a block boundary is never drawn outside the printed range.
+                $scope = classrecord_year_filter_sql($termYear)
+                    . classrecord_month_filter_sql(
+                        classrecord_normalize_month($readSetting('cr_from_month')),
+                        classrecord_normalize_month($readSetting('cr_to_month'))
+                    )
+                    . classrecord_weekday_filter_sql(
+                        classrecord_scheduled_weekdays($db, $classId)
+                    );
+                classrecord_assign_periods($db, $classId, $split, $scope);
+            }
+        }
+
+        echo ResponseAPI::success(['saved' => $saved], 'Class record settings saved');
     }
     elseif ($action === 'save_grading_sheet_template') {
         $classId = intval($_POST['class_id'] ?? $_GET['class_id'] ?? 0);
@@ -2584,8 +2948,326 @@ function generateAttendanceCSV($db, $class, $students, $sessions) {
     }
 }
 
-function generateAttendanceExcel($db, $class, $students, $sessions) {
-    generateAttendanceCSV($db, $class, $students, $sessions);
+// Excel column letters for a zero-based column index: 0 = A, 26 = AA.
+function excelColumnName(int $index) {
+    $name = '';
+    $index++;
+    while ($index > 0) {
+        $remainder = ($index - 1) % 26;
+        $name = chr(65 + $remainder) . $name;
+        $index = intdiv($index - $remainder, 26);
+    }
+    return $name;
+}
+
+// One worksheet cell as inline XML, so no shared-string table is needed.
+function excelCell(string $reference, $value, int $style = 0) {
+    $styleAttr = $style > 0 ? ' s="' . $style . '"' : '';
+    if ($value === null || $value === '') {
+        return '<c r="' . $reference . '"' . $styleAttr . '/>';
+    }
+    $text = htmlspecialchars((string)$value, ENT_QUOTES | ENT_XML1, 'UTF-8');
+    return '<c r="' . $reference . '"' . $styleAttr . ' t="inlineStr"><is><t xml:space="preserve">'
+        . $text . '</t></is></c>';
+}
+
+// Style table for the attendance workbook. Index order matters: each cellXf below
+// is referred to by number from the sheet builder.
+//  0 plain  1 title  2 subtitle  3 header center  4 header left  5 name cell
+//  6 present  7 absent  8 late  9 excused  10 blank mark  11 holiday banner
+//  12 seminar banner  13 totals header  14 attendance cell  15 legend
+function excelStylesXml() {
+    $fonts = [
+        '<font><sz val="11"/><name val="Calibri"/></font>',
+        '<font><b/><sz val="11"/><name val="Calibri"/></font>',
+        '<font><b/><sz val="14"/><name val="Calibri"/></font>',
+        '<font><sz val="10"/><name val="Calibri"/></font>',
+        '<font><b/><sz val="8"/><name val="Calibri"/></font>',
+        '<font><sz val="8"/><name val="Calibri"/></font>',
+        '<font><b/><sz val="9"/><name val="Calibri"/></font>',
+        '<font><b/><color rgb="FF881337"/><sz val="9"/><name val="Calibri"/></font>',
+        '<font><b/><color rgb="FF4C1D95"/><sz val="9"/><name val="Calibri"/></font>',
+    ];
+    $fills = ['none', 'gray125', 'D9D9D9', 'FECDD3', 'DDD6FE', 'DCFCE7', 'FEE2E2', 'FEF3C7', 'DBEAFE', 'F1F5F9'];
+    $fillXml = '<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>';
+    foreach (array_slice($fills, 2) as $color) {
+        $fillXml .= '<fill><patternFill patternType="solid"><fgColor rgb="FF' . $color
+            . '"/><bgColor indexed="64"/></patternFill></fill>';
+    }
+    $thin = '<left style="thin"><color rgb="FF000000"/></left><right style="thin"><color rgb="FF000000"/></right>'
+        . '<top style="thin"><color rgb="FF000000"/></top><bottom style="thin"><color rgb="FF000000"/></bottom>';
+
+    // fill, font, border, alignment flags per cellXf
+    $xfs = [
+        [0, 0, 0, ''],                                   // 0 plain
+        [0, 2, 0, 'horizontal="center"'],               // 1 title
+        [0, 3, 0, 'horizontal="center"'],               // 2 subtitle
+        [2, 4, 1, 'horizontal="center" vertical="center" wrapText="1"'],   // 3 header center
+        [2, 4, 1, 'horizontal="left" vertical="center" wrapText="1"'],     // 4 header left
+        [0, 5, 1, 'horizontal="left"'],                 // 5 name cell
+        [5, 4, 1, 'horizontal="center"'],               // 6 present
+        [6, 4, 1, 'horizontal="center"'],               // 7 absent
+        [7, 4, 1, 'horizontal="center"'],               // 8 late
+        [8, 4, 1, 'horizontal="center"'],               // 9 excused
+        [0, 4, 1, 'horizontal="center"'],               // 10 blank mark
+        [3, 7, 1, 'horizontal="center" vertical="center" wrapText="1"'],    // 11 holiday banner
+        [4, 8, 1, 'horizontal="center" vertical="center" wrapText="1"'],    // 12 seminar banner
+        [2, 4, 1, 'horizontal="center" vertical="center" wrapText="1"'],    // 13 totals header
+        [9, 4, 1, 'horizontal="center" vertical="center" wrapText="1"'],    // 14 attendance cell
+        [0, 5, 0, 'horizontal="left"'],                 // 15 legend
+    ];
+    $xfXml = '';
+    foreach ($xfs as $xf) {
+        list($fill, $font, $border, $align) = $xf;
+        $xfXml .= '<xf numFmtId="0" fontId="' . $font . '" fillId="' . $fill . '" borderId="' . $border . '" xfId="0"'
+            . ' applyFont="1"' . ($fill > 0 ? ' applyFill="1"' : '')
+            . ($border > 0 ? ' applyBorder="1"' : '')
+            . ($align !== '' ? ' applyAlignment="1"><alignment ' . $align . '/></xf>' : '/>');
+    }
+
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        . '<fonts count="' . count($fonts) . '">' . implode('', $fonts) . '</fonts>'
+        . '<fills count="' . (count($fills)) . '">' . $fillXml . '</fills>'
+        . '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>'
+        . '<border>' . $thin . '<diagonal/></border></borders>'
+        . '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+        . '<cellXfs count="' . count($xfs) . '">' . $xfXml . '</cellXfs>'
+        . '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>'
+        . '</styleSheet>';
+}
+
+/**
+ * Real .xlsx attendance sheet, written straight to OOXML.
+ *
+ * PhpWord 0.18 no longer ships an Excel writer, so the workbook is assembled by
+ * hand: it mirrors the printed sheet rather than the CSV, with a merged holiday or
+ * seminar banner row, P/A/L/E marks, and each student's own attendance figure.
+ */
+function generateAttendanceExcel($db, $class, $students, $sessions, $year = 0, $month = 0) {
+    if (!class_exists('ZipArchive')) {
+        echo ResponseAPI::error('Excel export unavailable: the PHP zip extension is not enabled');
+        return;
+    }
+
+    $monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+
+    $code = $class['code'] ?? '';
+    $program = trim(($class['course_program'] ?? '') . ' ' . ($class['year_level'] ?? '')
+        . '-' . ($class['section'] ?? ''));
+    $period = ($year > 0 && $month > 0) ? $monthNames[$month - 1] . ' ' . $year : 'All months';
+
+    $dayCount = count($sessions);
+    $lastCol = excelColumnName($dayCount + 1);   // student name + days + attendance
+    $merges = [];
+    $rows = [];
+    $rowNum = 0;
+
+    $addRow = function (array $cells, ?int $height = null) use (&$rows, &$rowNum) {
+        $rowNum++;
+        $body = '';
+        foreach ($cells as $colIndex => $cell) {
+            $body .= excelCell(excelColumnName($colIndex) . $rowNum, $cell[0], $cell[1] ?? 0);
+        }
+        $attrs = $height ? ' ht="' . $height . '" customHeight="1"' : '';
+        $rows[] = '<row r="' . $rowNum . '"' . $attrs . '>' . $body . '</row>';
+    };
+
+    // --- Title block ---
+    $addRow([['MONTHLY ATTENDANCE SHEET', 1]], 22);
+    $merges[] = 'A1:' . $lastCol . '1';
+    $addRow([['Course: ' . $code . '   |   Class: ' . $program
+        . '   |   AY: ' . ($class['academic_year'] ?? '')
+        . '   |   Month: ' . $period, 2]], 16);
+    $merges[] = 'A2:' . $lastCol . '2';
+
+    // Which day columns are holiday or seminar, so their names can be merged into
+    // a banner row that spans the highlighted block.
+    $markedTypes = [];
+    $markedLabels = [];
+    foreach ($sessions as $i => $session) {
+        $type = $session['session_type'] ?? 'regular';
+        $markedTypes[$i] = ($type !== 'regular') ? $type : '';
+        $markedLabels[$i] = trim((string)($session['label'] ?? ''));
+    }
+    $hasBanner = in_array('holiday', $markedTypes, true) || in_array('seminar', $markedTypes, true);
+
+    if ($hasBanner) {
+        $bannerRow = $rowNum + 1;   // the banner is the next row to be written
+        $banner = [['STUDENT NAME', 4]];
+        $col = 0;
+        while ($col < $dayCount) {
+            $type = $markedTypes[$col];
+            if ($type === '') {
+                $banner[] = ['', 10];
+                $col++;
+                continue;
+            }
+            $start = $col;
+            while ($col < $dayCount && $markedTypes[$col] === $type) $col++;
+            $names = [];
+            for ($k = $start; $k < $col; $k++) {
+                if ($markedLabels[$k] !== '') $names[] = $markedLabels[$k];
+            }
+            $text = $names ? implode(' • ', $names) : ($type === 'holiday' ? 'Holiday' : 'Seminar');
+            $banner[] = [$text, $type === 'holiday' ? 11 : 12];
+            if ($col - $start > 1) {
+                $merges[] = excelColumnName($start + 1) . $bannerRow . ':' . excelColumnName($col) . $bannerRow;
+            }
+        }
+        $banner[] = ['', 10];
+        $addRow($banner, 20);
+    }
+
+    // --- Day header row ---
+    $header = [['STUDENT NAME', 4]];
+    foreach ($sessions as $session) {
+        $header[] = [(string)date('j', strtotime($session['date'])), 3];
+    }
+    $header[] = ['ATTEND.', 3];
+    $addRow($header, 22);
+    $headerRow = $rowNum;
+
+    // --- Marks use the same letters as the printed sheet ---
+    $marks = ['present' => 'P', 'absent' => 'A', 'late' => 'L', 'excused' => 'E'];
+    $markStyle = ['present' => 6, 'absent' => 7, 'late' => 8, 'excused' => 9];
+
+    $attendance = $db->query("SELECT r.student_id, r.attendance_session_id, r.status
+        FROM attendance_record r
+        JOIN attendance_session a ON a.id = r.attendance_session_id
+        WHERE a.class_section_id = " . intval($class['id'] ?? 0))->fetch_all(MYSQLI_ASSOC);
+    $lookup = [];
+    foreach ($attendance as $record) {
+        $lookup[$record['student_id'] . ':' . $record['attendance_session_id']] = (string)$record['status'];
+    }
+    if (count($lookup) === 0) {
+        // Fallback to per-cell lookups if the batch query did not resolve.
+        foreach ($sessions as $session) {
+            $rowsForSession = $db->query("SELECT student_id, status FROM attendance_record
+                WHERE attendance_session_id = " . intval($session['id']))->fetch_all(MYSQLI_ASSOC);
+            foreach ($rowsForSession as $record) {
+                $lookup[$record['student_id'] . ':' . $session['id']] = (string)$record['status'];
+            }
+        }
+    }
+
+    foreach ($students as $student) {
+        $counts = ['present' => 0, 'absent' => 0, 'late' => 0, 'excused' => 0];
+        $row = [[$student['last_name'] . ', ' . $student['first_name'], 5]];
+        foreach ($sessions as $session) {
+            $status = $lookup[$student['id'] . ':' . $session['id']] ?? '';
+            if (isset($marks[$status])) {
+                $counts[$status]++;
+            }
+            $row[] = [$marks[$status] ?? '', $status !== '' ? ($markStyle[$status] ?? 10) : 10];
+        }
+        $attended = $counts['present'] + $counts['late'];
+        $rate = $dayCount > 0 ? round(($attended / $dayCount) * 100, 1) : 0;
+        $row[] = [$dayCount > 0 ? $attended . '/' . $dayCount . "\n" . $rate . '%' : '-', 14];
+        $addRow($row);
+    }
+
+    // --- Column totals ---
+    $totals = [['TOTALS', 4]];
+    foreach ($sessions as $index => $session) {
+        $columnTotals = ['present' => 0, 'absent' => 0, 'late' => 0, 'excused' => 0];
+        foreach ($students as $student) {
+            $status = $lookup[$student['id'] . ':' . $session['id']] ?? '';
+            if (isset($columnTotals[$status])) $columnTotals[$status]++;
+        }
+        $best = '';
+        $bestCount = -1;
+        foreach ($columnTotals as $status => $count) {
+            if ($count > $bestCount) { $best = $status; $bestCount = $count; }
+        }
+        $totals[] = [($bestCount > 0 ? $marks[$best] : '') . ' ' . $bestCount, 13];
+    }
+    $totals[] = ['', 13];
+    $addRow($totals, 18);
+
+    // --- Legend ---
+    $addRow([['Legend:  P = Present   A = Absent   L = Late   E = Excused   (blank) = Unmarked', 15]]);
+    $addRow([['Saving a day on the Attendance page marks every student left blank as present.', 15]]);
+
+    $sheet = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        . '<sheetViews><sheetView workbookViewId="0"><pane ySplit="' . $headerRow
+        . '" topLeftCell="A' . ($headerRow + 1) . '" activePane="bottomLeft" state="frozen"/>'
+        . '<selection pane="bottomLeft" activeCell="A' . ($headerRow + 1)
+        . '" sqref="A' . ($headerRow + 1) . '"/></sheetView></sheetViews>'
+        . '<sheetFormatPr defaultRowHeight="15"/>'
+        . '<cols><col min="1" max="1" width="34" customWidth="1"/>';
+    for ($i = 0; $i < $dayCount; $i++) {
+        $sheet .= '<col min="' . ($i + 2) . '" max="' . ($i + 2) . '" width="4.5" customWidth="1"/>';
+    }
+    $sheet .= '<col min="' . ($dayCount + 2) . '" max="' . ($dayCount + 2)
+        . '" width="11" customWidth="1"/></cols>'
+        . '<sheetData>' . implode('', $rows) . '</sheetData>';
+    if ($merges) {
+        $sheet .= '<mergeCells count="' . count($merges) . '">';
+        foreach ($merges as $merge) $sheet .= '<mergeCell ref="' . $merge . '"/>';
+        $sheet .= '</mergeCells>';
+    }
+    $sheet .= '</worksheet>';
+
+    $workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+        . ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        . '<sheets><sheet name="Attendance" sheetId="1" r:id="rId1"/></sheets></workbook>';
+
+    $workbookRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        . '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"'
+        . ' Target="worksheets/sheet1.xml"/>'
+        . '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles"'
+        . ' Target="styles.xml"/></Relationships>';
+
+    $rootRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        . '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"'
+        . ' Target="xl/workbook.xml"/></Relationships>';
+
+    $contentTypes = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        . '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        . '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        . '<Default Extension="xml" ContentType="application/xml"/>'
+        . '<Override PartName="/xl/workbook.xml"'
+        . ' ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        . '<Override PartName="/xl/worksheets/sheet1.xml"'
+        . ' ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        . '<Override PartName="/xl/styles.xml"'
+        . ' ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        . '</Types>';
+
+    $file = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'attendance_export_' . uniqid('', true) . '.xlsx';
+    $zip = new ZipArchive();
+    if ($zip->open($file, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+        echo ResponseAPI::error('Excel export failed: could not create the workbook file');
+        return;
+    }
+    $zip->addFromString('[Content_Types].xml', $contentTypes);
+    $zip->addFromString('_rels/.rels', $rootRels);
+    $zip->addFromString('xl/workbook.xml', $workbook);
+    $zip->addFromString('xl/_rels/workbook.xml.rels', $workbookRels);
+    $zip->addFromString('xl/styles.xml', excelStylesXml());
+    $zip->addFromString('xl/worksheets/sheet1.xml', $sheet);
+    $zip->close();
+
+    $safeCode = preg_replace('/[^a-z0-9_-]+/i', '_', $code ?: 'report');
+    $filename = 'Attendance_' . $safeCode
+        . ($year > 0 && $month > 0 ? '_' . $year . '-' . sprintf('%02d', $month) : '') . '.xlsx';
+
+    while (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header('Content-Disposition: attachment; filename="' . $filename . '"');
+    header('Content-Length: ' . filesize($file));
+    header('Cache-Control: private, max-age=0');
+    readfile($file);
+    unlink($file);
+    exit;
 }
 
 // Printable A4 attendance report. Every session becomes a column, so this uses
@@ -2697,6 +3379,7 @@ function attendanceSheetHtml($db, $class, $students, $sessions) {
 
 // Printable attendance report: browser print-to-PDF.
 function generateAttendancePdf($db, $class, $students, $sessions) {
+    header('Content-Type: text/html; charset=UTF-8');
     $html = attendanceSheetHtml($db, $class, $students, $sessions);
     echo str_replace('</body>', '<script>window.onload = function() { window.print(); };</script></body>', $html);
 }
