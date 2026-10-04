@@ -22,7 +22,7 @@ if (!function_exists('gradesheet_render')) {
         if ($dataUri !== '') {
             return '<img class="gs-logo" src="' . gradesheet_e($dataUri) . '" alt="University logo">';
         }
-        return '<div class="gs-logo-placeholder">LOGO<br><small>assets/img/csu-logo.png</small></div>';
+        return '<div class="gs-logo-placeholder">LOGO<br><small>assets/images/capsu.jpg</small></div>';
     }
 
     /**
@@ -89,23 +89,26 @@ if (!function_exists('gradesheet_render')) {
         return $html;
     }
 
-    /** The student score table. */
+    /**
+     * The student score table.
+     *
+     * Midterm Rating and Midterm Remarks are deliberately not printed. The midterm
+     * period is still graded, weighted and stored - only these two columns are left
+     * out of the sheet, so the report shows the final result and its remarks.
+     */
     function gradesheet_table_html($rows, $startIndex) {
         $e = 'gradesheet_e';
         $html  = '<table class="gs-table">';
         $html .= '<thead><tr>'
                . '<th class="c-no">No.</th>'
                . '<th class="c-name">Name of Students<br>(Last, First, MI)</th>'
-               . '<th class="c-rate">Midterm<br>Rating</th>'
-               . '<th class="c-rem">Midterm<br>Remarks</th>'
                . '<th class="c-rate">Numerical<br>Rating</th>'
                . '<th class="c-rate">Final<br>Grade</th>'
                . '<th class="c-rate">Unit<br>Credit</th>'
                . '<th class="c-rem">Remarks</th>'
                . '</tr></thead><tbody>';
 
-        $columns = ['midterm_rating', 'midterm_remarks', 'numerical_rating',
-                    'final_grade', 'unit_credit', 'remarks'];
+        $columns = ['numerical_rating', 'final_grade', 'unit_credit', 'remarks'];
 
         foreach ($rows as $offset => $row) {
             $number = $startIndex + $offset + 1;
@@ -136,38 +139,58 @@ if (!function_exists('gradesheet_render')) {
 
         $html  = '<div class="footer-block gs-footer">';
 
+        // Certification sits alone at the top-left of the footer.
         $html .= '<p class="gs-certify" data-field="certification">' . $e($meta['certification']) . '</p>';
 
-        $html .= '<table class="gs-signatures"><tr>';
+        // Submitted by sits on its own line between the certification and the
+        // band, centred on the page. It was the third cell of the four-cell band,
+        // which left it visually attached to the grading scale rather than to the
+        // declaration above it - the faculty member signs their own submission,
+        // not the scale.
+        $html .= '<div class="gs-submitted-row">';
+        $html .= '<div class="gs-sig-label">Submitted by:</div>';
+        $html .= '<div class="gs-sig-name" data-field="facilitator_name">' . $e($meta['facilitator_name']) . '</div>';
+        $html .= '<div class="gs-sig-role">Course Facilitator</div>';
+        $html .= '</div>';
 
-        // [label, [ [field, role, extra class], ... ]]
-        $columns = [
-            ['Submitted by:', [['facilitator_name', 'Course Facilitator', '']]],
-            ['Noted:',       [['program_chair', 'Program Chair', ''], ['dean', 'Dean', 'gs-sig-gap']]],
-            ['Received:',    [['registrar', 'Registrar', ''], ['date_received', 'Date', 'gs-sig-gap']]],
-        ];
+// Main band: grading scale on the left, signatures to its right.
+        // A table rather than display:grid because Dompdf and mPDF do not
+        // implement grid, so a grid footer would print differently from the
+        // browser preview.
+        //
+        // Three cells, not four. Noted/Received keep their own column so they
+        // sit further left than the Dean block without dragging it along.
+        $html .= '<table class="gs-footer-main"><tr>';
 
-        foreach ($columns as $column) {
-            $html .= '<td class="gs-sig-col">';
-            $html .= '<div class="gs-sig-label">' . $column[0] . '</div>';
-            foreach ($column[1] as $pair) {
-                $html .= '<div class="gs-sig-line ' . $pair[2] . '" data-field="' . $pair[0] . '">'
-                       . $e($meta[$pair[0]]) . '</div>';
-                $html .= '<div class="gs-sig-role">' . $pair[1] . '</div>';
-            }
-            $html .= '</td>';
+        $html .= '<td class="gs-cell gs-cell-scale">';
+        $html .= '<div class="gs-scale-title">Grading System</div>';
+        $html .= '<div class="gs-scale-list">';
+        foreach ($scale as $line) {
+            $html .= '<div class="gs-scale-row">' . $e($line) . '</div>';
         }
+        $html .= '</div></td>';
+
+        // Centre-left: Noted (program chair) above Received (registrar).
+        $html .= '<td class="gs-cell gs-cell-noted">';
+        $html .= '<div class="gs-sig-label">Noted:</div>';
+        $html .= '<div class="gs-sig-name" data-field="program_chair">' . $e($meta['program_chair']) . '</div>';
+        $html .= '<div class="gs-sig-role">Program Chair</div>';
+        $html .= '<div class="gs-sig-gap"></div>';
+        $html .= '<div class="gs-sig-label">Received:</div>';
+        $html .= '<div class="gs-sig-name" data-field="registrar">' . $e($meta['registrar']) . '</div>';
+        $html .= '<div class="gs-sig-role">Registrar</div>';
+        $html .= '</td>';
+
+        // Right: Dean and the date received.
+        $html .= '<td class="gs-cell gs-cell-right">';
+        $html .= '<div class="gs-sig-name" data-field="dean">' . $e($meta['dean']) . '</div>';
+        $html .= '<div class="gs-sig-role">Dean</div>';
+        $html .= '<div class="gs-sig-gap"></div>';
+        $html .= '<div class="gs-sig-label">Date:</div>';
+        $html .= '<div class="gs-sig-name" data-field="date_received">' . $e($meta['date_received']) . '</div>';
+        $html .= '</td>';
 
         $html .= '</tr></table>';
-
-        $html .= '<table class="gs-scale"><tr><td colspan="2" class="gs-scale-title">Grading System</td></tr>';
-        foreach (array_chunk($scale, 2) as $pair) {
-            $html .= '<tr>';
-            $html .= '<td>' . $e($pair[0]) . '</td>';
-            $html .= '<td>' . $e($pair[1] ?? '') . '</td>';
-            $html .= '</tr>';
-        }
-        $html .= '</table>';
 
         $html .= '<p class="gs-note" data-field="note">' . $e($meta['note']) . '</p>';
         $html .= '</div>';
@@ -254,25 +277,55 @@ if (!function_exists('gradesheet_render')) {
            any leftover, so a partial total silently distorts every column and
            stops matching the .docx column widths. */
         .gs-table .c-no { width: 5%; }
-        .gs-table .c-name { width: 34%; text-align: left; }
-        .gs-table .c-rate, .gs-table .c-rem { width: 10.1667%; }
+        .gs-table .c-name { width: 39%; text-align: left; }
+        .gs-table .c-rate, .gs-table .c-rem { width: 14%; }
 
         .footer-block { page-break-inside: avoid; break-inside: avoid; }
-        .gs-footer { margin-top: 4mm; font-size: 9pt; }
-        .gs-certify { margin: 0 0 2mm; font-size: 9.5pt; }
-        .gs-signatures { width: 100%; border-collapse: collapse; margin-bottom: 2mm; }
-        .gs-signatures td { border: 0; padding: 0 3mm 0 0; vertical-align: top; width: 33.333%; }
-        .gs-sig-label { font-size: 8.5pt; margin-bottom: 0.5mm; }
-        .gs-sig-line {
-            border-bottom: 1px solid #000; min-height: 5mm;
-            font-size: 9.5pt; font-weight: bold; padding: 0 0.5mm;
+
+        /* Footer. Sized in pt to match the rest of the sheet (the px figures in
+           the design brief are the same values at 96dpi: 12px = 9pt). */
+        .gs-footer {
+            margin-top: 5mm;
+            width: 100%;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 9pt;
+            line-height: 1.25;
         }
-        .gs-sig-gap { margin-top: 6mm; }
-        .gs-sig-role { font-size: 8pt; margin-top: 0.5mm; }
-        .gs-scale { width: 60%; border-collapse: collapse; font-size: 8pt; }
-        .gs-scale td { border: 0; padding: 0.3mm 0; }
-        .gs-scale-title { font-weight: bold; text-decoration: underline; margin-bottom: 0.5mm; }
-        .gs-note { margin: 1.5mm 0 0; font-size: 8pt; font-style: italic; }
+        .gs-certify { margin: 0 0 4mm; font-size: 9pt; }
+
+        .gs-footer-main { width: 100%; border-collapse: collapse; }
+        .gs-footer-main td { border: 0; padding: 0; vertical-align: top; }
+        /* 22 / 26 / 52. The band is three cells since Submitted by moved above
+           it. Sizes are measured, not guessed: at 10.5pt bold the facilitator
+           name needed 53.4mm, which is why that block had 33% to itself; the
+           remaining 67% splits here so Noted/Received keep their own column and
+           the Dean block still has room for a long name. */
+        .gs-cell-scale     { width: 22%; padding-right: 4mm; text-align: left; }
+        .gs-cell-noted     { width: 26%; padding-right: 4mm; text-align: center; }
+        .gs-cell-right     { width: 52%; text-align: center; }
+
+        /* Own line between the certification and the band, centred on the page.
+           A block rather than a table cell: Dompdf and mPDF do not implement
+           grid, and a table cell here would force the band to start below an
+           empty first column. */
+        .gs-submitted-row {
+            text-align: center; margin: 0 0 4mm; padding: 0;
+        }
+
+        .gs-sig-label { font-size: 9pt; margin-bottom: 0.5mm; }
+        /* Names are plain bold text - no underline, no rule, no border. */
+        .gs-sig-name {
+            font-size: 10.5pt; font-weight: bold; line-height: 1.2;
+            min-height: 5mm; padding: 0 0 0.5mm 0;
+        }
+        .gs-sig-gap { height: 7mm; }
+        .gs-sig-role { font-size: 8.5pt; margin-top: 0.5mm; }
+
+        .gs-scale-title { font-size: 9pt; font-weight: bold; margin-bottom: 1mm; }
+        .gs-scale-list { font-size: 8pt; line-height: 1.3; }
+        .gs-scale-row { white-space: nowrap; }
+
+        .gs-note { margin: 3mm 0 0; font-size: 8pt; font-style: italic; }
 
         /* Edit-mode affordances: dashed outline only while editing, never on paper. */
         .gs-edit { cursor: text; }

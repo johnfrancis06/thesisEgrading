@@ -17,7 +17,7 @@
  */
 function gradesheet_logo_data_uri($path = null) {
     if ($path === null) {
-        $path = __DIR__ . '/../assets/img/csu-logo.png';
+        $path = __DIR__ . '/../assets/images/capsu.jpg';
     }
     if (!is_file($path)) {
         return '';
@@ -61,6 +61,33 @@ function gradesheet_defaults($class, $facultyName = '') {
         'date_received'     => '',
         'note'              => 'Note: To be submitted in two (2) copies together with the class list.',
     ];
+}
+
+/**
+ * Full words for the Remarks column.
+ *
+ * The computed remark is a code, but the grading scale printed in the footer
+ * spells them out, so the sheet has to as well.
+ */
+function gradesheet_remarks_text($remark) {
+    $codes = ['INC' => 'Incomplete', 'DRP' => 'Dropped'];
+    $remark = trim((string)$remark);
+    return $codes[strtoupper($remark)] ?? ($remark !== '' ? $remark : 'Incomplete');
+}
+
+/**
+ * Formats a raw score for print: up to two decimals, trailing zeros trimmed.
+ *
+ * 87.3 stays "87.3", 87.00 becomes "87", 96.50 becomes "96.5". Zero returns an
+ * empty string so the caller can substitute INC.
+ */
+function gradesheet_format_score($score) {
+    $score = round(floatval($score), 2);
+    if ($score <= 0) {
+        return '';
+    }
+    $text = number_format($score, 2, '.', '');
+    return rtrim(rtrim($text, '0'), '.');
 }
 
 /** The fixed grading scale printed in the footer of every sheet. */
@@ -116,8 +143,21 @@ function gradesheet_load($db, $classId, $facultyName = '') {
         $grades = GradingHelper::calculateStudentGrades($db, $classId, $student['id']);
 
         $midtermRating = round($grades['midterm']['grade'] ?? 0);
-        $finalRating   = round($grades['final']['grade'] ?? 0);
-        $overallPoint  = (string)($grades['overall']['grade_point'] ?? 'INC');
+
+        // The printed score is the unrounded overall, so it reads as 87.3 rather
+        // than 87, and the grade point is converted from that exact value. Using
+        // the rounded figure instead would move a score such as 86.7 into the
+        // 2.00 band instead of the 2.25 band it belongs to.
+        $overallRaw = floatval($grades['overall']['grade_raw'] ?? 0);
+
+        // Converted from the grade_scale bands: 0/75/78/81/84/87/90/93/96/99.
+        $overallPoint = GradingHelper::getGradePointFromDB($db, $overallRaw);
+
+        // An incomplete record has no final result to report, so the sheet shows
+        // INC instead of the 5.00 the conversion returns for a failing score,
+        // and leaves the unit credit blank rather than crediting an unfinished
+        // subject.
+        $isComplete = !empty($grades['overall']['complete']);
 
         $rows[] = [
             'student_id'      => (int)$student['id'],
@@ -127,10 +167,10 @@ function gradesheet_load($db, $classId, $facultyName = '') {
                                   . ($student['middle_initial'] ?? '')),
             'midterm_rating'  => $midtermRating ?: 'INC',
             'midterm_remarks' => $grades['midterm']['remarks'] ?? 'INC',
-            'numerical_rating'=> $finalRating ?: 'INC',
-            'final_grade'     => $overallPoint,
-            'unit_credit'     => '3',
-            'remarks'         => $grades['overall']['remarks'] ?? 'INC',
+            'numerical_rating'=> gradesheet_format_score($overallRaw) ?: 'INC',
+            'final_grade'     => $isComplete ? number_format($overallPoint, 2) : 'INC',
+            'unit_credit'     => $isComplete ? '3' : '',
+            'remarks'         => gradesheet_remarks_text($grades['overall']['remarks'] ?? 'INC'),
         ];
     }
 

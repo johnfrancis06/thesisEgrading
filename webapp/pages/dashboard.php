@@ -55,7 +55,7 @@ $attOverview = $db->query("SELECT
     <title>Dashboard - <?= APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=8">
+    <link rel="stylesheet" href="assets/css/style.css?v=18">
 </head>
 <body>
     <?php include 'includes/header.php'; ?>

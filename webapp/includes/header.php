@@ -9,7 +9,9 @@ $initials = strtoupper(substr($facultyName, 0, 2));
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
         <a href="index.php?page=dashboard" style="display: flex; align-items: center; gap: 0.75rem; color: var(--white); text-decoration: none;">
-            <div class="sidebar-brand-icon">EG</div>
+            <div class="sidebar-brand-icon">
+                <img src="assets/images/capsu.jpg" alt="CAPSU logo">
+            </div>
             <div class="sidebar-brand-text">E-Grading</div>
         </a>
     </div>

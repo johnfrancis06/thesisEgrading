@@ -23,7 +23,7 @@ if ($classId > 0) {
     <title><?= $classId > 0 ? 'Monthly Attendance Sheet - ' . APP_NAME : 'Select a Class - ' . APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=17">
+    <link rel="stylesheet" href="assets/css/style.css?v=18">
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         .sheet-title {
@@ -282,13 +282,16 @@ if ($classId > 0) {
     <div id="statusMenu" class="status-menu"></div>
     
     <script src="assets/vendor/bootstrap.bundle.min.js"></script>
-    <script src="assets/js/attendance.js?v=11"></script>
+    <script src="assets/js/attendance.js?v=12"></script>
     <script>
         document.getElementById('mobileToggle')?.addEventListener('click', function() {
             document.getElementById('sidebar').classList.toggle('show');
             document.getElementById('sidebarOverlay').classList.toggle('show');
         });
         <?php if ($classId > 0): ?>
+        // Printed on the Absent Checker sheet, which opens in its own window.
+        window.attendanceClassLabel = <?= json_encode(htmlspecialchars($class['course_program']) . ' Yr' . $class['year_level'] . '-' . htmlspecialchars($class['section'])) ?>;
+        window.attendanceTeacherName = <?= json_encode(htmlspecialchars($_SESSION['faculty_name'] ?? '')) ?>;
         document.getElementById('monthOverviewToggle')
             ?.addEventListener('click', function() { toggleMonthOverview(); });
         restoreMonthOverviewState();

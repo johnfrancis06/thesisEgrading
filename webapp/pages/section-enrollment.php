@@ -11,7 +11,7 @@ $subjects = $db->query("SELECT id, code, title, default_units FROM subject ORDER
     <title>Student Enrollment - <?= APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=9">
+    <link rel="stylesheet" href="assets/css/style.css?v=18">
     <script src="assets/vendor/xlsx.full.min.js"></script>
 </head>
 <body>

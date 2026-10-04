@@ -55,7 +55,7 @@ async function renderGradingTable(data, classId, period) {
     updatePerfectScoreDisplay(perfectScores);
     
     // Build dynamic header
-    buildDynamicHeader(configs);
+    buildDynamicHeader(configs, period);
     
     // Build body rows
     let bodyHTML = '';
@@ -93,24 +93,35 @@ async function fetchCategoryConfigs(classId, period) {
     }
 }
 
-function getComponentKeyFromTemplate(templateId) {
-    // Map template IDs to component keys for backward compatibility
-    const templateMap = {
-        1: 'class_participation',
-        2: 'problem_set',
-        3: 'quizzes',
-        4: 'periodical_exam'
-    };
-    return templateMap[templateId] || `custom_${templateId}`;
-}
-
 // Single source of truth for the key used to address a category, on the client
-// and in GradingHelper::mapCategoryToComponent.
+// and in GradingHelper::mapCategoryToComponent (includes/helpers.php).
+//
+// The server is the authority: it files every grade_item into component_details
+// under a key derived from the category's template id and name, so the client must
+// derive the same key or the column finds no item ids, renders data-item="new",
+// and the score can never be saved.
+//
+// Only canonical templates (1-4) are folded onto a component. A custom category
+// keeps a name-derived key, because a folded custom category would collide with
+// the template category that already owns the slot: the two columns would then
+// share one perfect score and one weight while the sheet summed both of their
+// items into it, which is what pushed EQUIV to 800% and beyond.
 function getComponentKey(config) {
     if (!config) return '';
-    if (config.template_id) return getComponentKeyFromTemplate(config.template_id);
-    const name = config.custom_name || config.template_name || '';
-    return name.toLowerCase().replace(/\s+/g, '_');
+    if ([1, 2, 3, 4].includes(Number(config.template_id))) {
+        const name = String(config.custom_name || config.template_name || '').toLowerCase();
+        if (name.includes('standing') || name.includes('participation')) return 'class_participation';
+        if (name.includes('problem')) return 'problem_set';
+        if (name.includes('quiz')) return 'quizzes';
+        if (name.includes('exam') || name.includes('periodical')) return 'periodical_exam';
+    }
+    // Custom category, or a teacher-made template: address it by its own name.
+    // The character class must match the server's preg_replace('/[^a-z0-9]+/', '_')
+    // exactly, or a name carrying punctuation produces two different keys.
+    return String(config.custom_name || config.template_name || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
 }
 
 function getCategoryPerfectScore(config) {
@@ -128,7 +139,14 @@ function updatePerfectScoreDisplay(perfectScores) {
     });
 }
 
-function buildDynamicHeader(configs) {
+// Period summary columns: the period's grade, then the conversions of it.
+// The heading names the active tab, since the same builder draws the midterm
+// and the final sheet and they differ only by this label.
+function periodGradeHeading(period) {
+    return period === 'final' ? 'FINAL GRADE' : 'MIDTERM GRADE';
+}
+
+function buildDynamicHeader(configs, period) {
     const thead = document.getElementById('gradingHead');
     let headerHTML = '';
     
@@ -148,10 +166,12 @@ function buildDynamicHeader(configs) {
         headerHTML += `<th colspan="${colSpan}" class="header-main">${config.custom_name || config.template_name || 'Category'}</th>`;
     });
     
-    // MIDTERM GRADE, Round off, REMARKS
-    headerHTML += '<th rowspan="3" class="header-main header-midterm">MIDTERM GRADE</th>';
+    // Period grade, Round off, EQUIVALENT, REMARKS, MISSING
+    headerHTML += `<th rowspan="3" class="header-main header-midterm">${periodGradeHeading(period)}</th>`;
     headerHTML += '<th rowspan="3" class="header-main header-roundoff">Round off</th>';
+    headerHTML += '<th rowspan="3" class="header-main header-equivalent">EQUIVALENT</th>';
     headerHTML += '<th rowspan="3" class="header-main header-remarks">REMARKS</th>';
+    headerHTML += '<th rowspan="3" class="header-main header-missing">MISSING</th>';
     headerHTML += '</tr>';
     
     // Row 2: Only add if there are multiple items per category (sub-groups)
@@ -199,13 +219,15 @@ function buildPerfectScoreRow(configs) {
         
         html += `<td class="cell-total perfect-cell">${perfectScore || ''}</td>`;
         html += `<td class="cell-equiv perfect-cell"></td>`;
-        html += `<td class="cell-weight perfect-cell"><input type="number" class="weight-input" data-component="${getComponentKeyFromTemplate(config.template_id)}" data-max-weight="${weight}" value="${weight}" readonly style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold;"></td>`;
+        html += `<td class="cell-weight perfect-cell"><input type="number" class="weight-input" data-component="${getComponentKey(config)}" data-max-weight="${weight}" value="${weight}" readonly style="width: 60px; padding: 3px 4px; text-align: center; border: 1px solid #999; border-radius: 2px; font-weight: bold;"></td>`;
     });
     
     // Summary columns
     html += `<td class="cell-midterm perfect-cell"></td>`;
     html += `<td class="cell-roundoff perfect-cell"></td>`;
+    html += `<td class="cell-equivalent perfect-cell"></td>`;
     html += `<td class="cell-remarks perfect-cell"></td>`;
+    html += `<td class="cell-missing perfect-cell"></td>`;
     html += '</tr>';
     
     return html;
@@ -279,10 +301,13 @@ function buildStudentRow(student, configs, period) {
     });
     
     const remarks = totalWeighted >= 75 ? 'Passed' : (totalWeighted > 0 ? 'Failed' : 'INC');
+    const [missingText, missingComplete] = missingCellText(componentsData, configs);
     
     html += `<td class="cell-midterm cell-readonly">${totalWeighted > 0 ? totalWeighted.toFixed(2) : ''}</td>`;
     html += `<td class="cell-roundoff cell-readonly">${totalWeighted > 0 ? Math.round(totalWeighted) : ''}</td>`;
+    html += `<td class="cell-equivalent cell-readonly">${totalWeighted > 0 ? gradePointLabel(totalWeighted) : ''}</td>`;
     html += `<td class="cell-remarks cell-readonly">${remarks}</td>`;
+    html += `<td class="cell-missing${missingComplete ? ' is-complete' : ''}">${escapeAttr(missingText)}</td>`;
     
     html += '</tr>';
     return html;
@@ -537,12 +562,27 @@ function updateComputedCells(studentId, allComponentData, periodGrade, configs, 
     const row = document.querySelector(`tr[data-student="${studentId}"]`);
     if (!row) return;
     
+    // Rebuilt from the inputs so the column matches what is on screen.
+    const liveDetails = {};
+    (configs || []).forEach(config => {
+        const key = getComponentKey(config);
+        const inputs = row.querySelectorAll(`input.grade-input[data-component="${key}"]`);
+        liveDetails[key] = {
+            items: Array.from(inputs).map((input, idx) => ({
+                label: input.dataset.label || `Item ${idx + 1}`,
+                has_score: String(input.value ?? '').trim() !== ''
+            }))
+        };
+    });
+    
     const totalCells = row.querySelectorAll('.cell-total.cell-readonly');
     const equivCells = row.querySelectorAll('.cell-equiv.cell-readonly');
     const weightInputs = row.querySelectorAll('input.weight-input');
     const midtermCell = row.querySelector('.cell-midterm.cell-readonly');
     const roundoffCell = row.querySelector('.cell-roundoff.cell-readonly');
+    const equivalentCell = row.querySelector('.cell-equivalent.cell-readonly');
     const remarksCell = row.querySelector('.cell-remarks.cell-readonly');
+    const missingCell = row.querySelector('.cell-missing');
     
     // Use configs order instead of hardcoded compOrder
     if (configs && configs.length > 0) {
@@ -607,9 +647,21 @@ function updateComputedCells(studentId, allComponentData, periodGrade, configs, 
         roundoffCell.textContent = periodGrade > 0 ? Math.round(periodGrade) : '';
     }
     
+    // Grade point the score converts to, e.g. 81.03 -> 2.5
+    if (equivalentCell) {
+        equivalentCell.textContent = periodGrade > 0 ? gradePointLabel(periodGrade) : '';
+    }
+    
     // Remarks - use backend formula
     if (remarksCell) {
         remarksCell.textContent = remarks;
+    }
+    
+    // Which items still have no score, or "complete"
+    if (missingCell) {
+        const [text, isComplete] = missingCellText(liveDetails, configs);
+        missingCell.textContent = text;
+        missingCell.classList.toggle('is-complete', isComplete);
     }
 }
 
@@ -634,9 +686,16 @@ function attachRowHoverEffects() {
 }
 
 // Equivalent score as a percentage of the configured perfect score.
+//
+// Clamped to 100: transmutation expresses a raw score against the perfect score,
+// and no student can exceed the perfect score. Without the cap a category whose
+// stored scores outrun its max_score - which happens when an item's max is lowered
+// after grades are entered - reported 800% and inflated the weighted grade.
 function transmute(raw, max) {
     if (max <= 0) return 0;
-    return (raw / max) * 100;
+    const pct = (raw / max) * 100;
+    if (!isFinite(pct)) return 0;
+    return Math.min(100, Math.max(0, pct));
 }
 
 // Grade point lookup (for reference)
@@ -652,6 +711,42 @@ function getGradePoint(score) {
     if (score < 96) return 1.50;
     if (score < 99) return 1.25;
     return 1.00;
+}
+
+// The grade point a score converts to, e.g. 81.03 -> "2.5".
+// Computed from the exact score, never from a rounded figure, so 86.7 stays 2.25
+// instead of dropping to the 2.00 that its rounded 87 would give. A trailing
+// ".00" is dropped, so the scale reads 1 to 5 rather than 1.00 to 5.00.
+function gradePointLabel(score) {
+    const value = parseFloat(score);
+    if (!isFinite(value) || value <= 0) return '';
+    return String(getGradePoint(value));
+}
+
+// Labels of the items a student has no score for, e.g. "Quiz 1, Periodical Exam".
+// Reads the same has_score flags the completeness check uses, so the column and
+// the INC remark can never disagree.
+function missingItemsText(componentDetails, configs) {
+    const labels = [];
+    (configs || []).forEach(config => {
+        const key = getComponentKey(config);
+        const data = componentDetails[key] || {};
+        const items = Array.isArray(data.items) ? data.items : [];
+        items.forEach((item, idx) => {
+            const has = item && (item.has_score === true || item.has_score === 1 || item.has_score === '1');
+            if (!has) {
+                labels.push(item && item.label ? item.label : `Item ${idx + 1}`);
+            }
+        });
+    });
+    return labels.join(', ');
+}
+
+// Text for the MISSING cell: the items with no score, or "complete" when there
+// are none. Returns [text, isComplete] so the cell can drop its warning tint.
+function missingCellText(componentDetails, configs) {
+    const text = missingItemsText(componentDetails, configs);
+    return [text || 'complete', text === ''];
 }
 
 // Calculate period grade matching backend formula:
@@ -697,16 +792,13 @@ function calculatePeriodGrade(componentScores, componentDetails, weights) {
     return 0;
 }
 
-// Calculate overall final grade matching backend:
-// If both midterm and final complete: Overall = (Final × 0.6) + (Midterm × 0.4)
-// If only one period complete: use that period's grade
+// Calculate overall final grade matching the backend:
+// Both periods complete: Overall = (Final × 0.6) + (Midterm × 0.4)
+// Otherwise 0, and the remarks read INC. Returning the one complete period
+// instead would put the midterm in the TOTAL GRADE column as if it were final.
 function calculateOverallGrade(midtermGrade, finalGrade, midtermComplete, finalComplete) {
     if (midtermComplete && finalComplete) {
         return Math.round((finalGrade * 0.6) + (midtermGrade * 0.4));
-    } else if (midtermComplete) {
-        return Math.round(midtermGrade);
-    } else if (finalComplete) {
-        return Math.round(finalGrade);
     }
     return 0;
 }
@@ -1148,6 +1240,7 @@ function renderTotalGradesTable(data, classId) {
     headerHTML += `<th colspan="3" class="header-main bg-primary text-white">FINAL GRADE (${finalWeight}%)</th>`;
     headerHTML += '<th rowspan="2" class="header-main header-midterm bg-success text-white" style="min-width: 100px;">TOTAL GRADE</th>';
     headerHTML += '<th rowspan="2" class="header-main header-roundoff bg-success text-white" style="min-width: 80px;">Round off</th>';
+    headerHTML += '<th rowspan="2" class="header-main header-equivalent bg-success text-white" style="min-width: 100px;">EQUIVALENT</th>';
     headerHTML += '<th rowspan="2" class="header-main header-remarks bg-success text-white" style="min-width: 90px;">REMARKS</th>';
     headerHTML += '</tr>';
     
@@ -1359,7 +1452,8 @@ function buildTotalGradeStudentRow(student) {
     html += `<td class="cell-equiv bg-primary">${finalGradePoint !== null ? finalGradePoint.toFixed(2) : ''}</td>`;
     html += `<td class="cell-total bg-primary">${finalRemarks}</td>`;
     
-    // Overall - with completeness warning
+    // Overall - with completeness warning. An incomplete blend has no final
+    // result, so the four cells read INC rather than a misleading 0.00.
     const warningIcon = overallComplete && !isDropped ? '' : `
         <i class="bi bi-exclamation-triangle-fill text-warning ms-1" 
            data-bs-toggle="tooltip" 
@@ -1367,9 +1461,14 @@ function buildTotalGradeStudentRow(student) {
            title="${buildCompletenessTooltip(midtermCompleteness, finalCompleteness, isDropped)}"
            style="cursor: help;"></i>
     `;
-    html += `<td class="cell-midterm cell-readonly bg-success text-white fw-bold" style="min-width: 100px;">${overallGrade !== null && overallGrade !== '' ? overallGrade.toFixed(2) : ''}${warningIcon}</td>`;
-    html += `<td class="cell-roundoff cell-readonly bg-success text-white fw-bold" style="min-width: 80px;">${overallRounded !== '' ? overallRounded : ''}</td>`;
-    html += `<td class="cell-remarks cell-readonly bg-success text-white fw-bold" style="min-width: 90px;">${overallRemarks}</td>`;
+    const overallText = overallComplete ? overallGrade.toFixed(2) : 'INC';
+    const overallRoundText = overallComplete ? String(overallRounded) : 'INC';
+    const overallPointText = overallComplete && overallGrade > 0 ? gradePointLabel(overallGrade) : 'INC';
+
+    html += `<td class="cell-midterm cell-readonly bg-success text-white fw-bold" style="min-width: 100px;">${overallText}${warningIcon}</td>`;
+    html += `<td class="cell-roundoff cell-readonly bg-success text-white fw-bold" style="min-width: 80px;">${overallRoundText}</td>`;
+    html += `<td class="cell-equivalent cell-readonly bg-success text-white fw-bold" style="min-width: 100px;">${overallPointText}</td>`;
+    html += `<td class="cell-remarks cell-readonly bg-success text-white fw-bold" style="min-width: 90px;">${overallRemarks || 'INC'}</td>`;
     
     html += '</tr>';
     return html;

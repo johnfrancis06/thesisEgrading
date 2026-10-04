@@ -9,7 +9,7 @@
     <title><?= APP_NAME ?> - E-Grading Management System</title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=8">
+    <link rel="stylesheet" href="assets/css/style.css?v=18">
     <style>
         .landing-page {
             min-height: 100vh;

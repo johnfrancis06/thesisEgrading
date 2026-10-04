@@ -2571,76 +2571,15 @@ try {
             exit;
         }
         
-        // Remove synced rows before replacing configs because grade_category.config_id
-        // references grade_category_config.id without ON DELETE CASCADE.
-        $existingStmt = $db->prepare("SELECT id FROM grade_category_config WHERE class_section_id = ? AND period = ?");
-        $existingStmt->bind_param("is", $classId, $period);
-        $existingStmt->execute();
-        $existingConfigs = $existingStmt->get_result()->fetch_all(MYSQLI_ASSOC);
-        removeSyncedConfigRows($db, array_column($existingConfigs, 'id'));
-
-        // Delete existing configs for this class/period (full replace)
-        $stmt = $db->prepare("DELETE FROM grade_category_config WHERE class_section_id = ? AND period = ?");
-        $stmt->bind_param("is", $classId, $period);
-        $stmt->execute();
-        
-        // Insert new configs
-        $sortOrder = 0;
-        foreach ($configs as $config) {
-            $templateId = isset($config['template_id']) && intval($config['template_id']) > 0
-                ? intval($config['template_id'])
-                : null;
-            if ($templateId !== null) {
-                $templateCheck = $db->prepare("SELECT id FROM grade_category_template WHERE id = ? AND is_active = TRUE");
-                $templateCheck->bind_param("i", $templateId);
-                $templateCheck->execute();
-                if (!$templateCheck->get_result()->fetch_assoc()) {
-                    $templateId = null;
-                }
-            }
-            $customName = trim($config['custom_name'] ?? '');
-            $weight = floatval($config['weight_percent'] ?? 0);
-            $itemCount = intval($config['item_count'] ?? 1);
-            $isVisible = isset($config['is_visible']) ? (bool)$config['is_visible'] : true;
-            $items = $config['items'] ?? [];
-            $perfectScore = array_sum(array_map(function ($item) {
-                return floatval($item['max_score'] ?? 0);
-            }, $items));
-            
-            $stmt = $db->prepare("
-                INSERT INTO grade_category_config (class_section_id, period, template_id, custom_name, weight_percent, perfect_score, item_count, sort_order, is_visible)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-            $stmt->bind_param("isisddiii", $classId, $period, $templateId, $customName, $weight, $perfectScore, $itemCount, $sortOrder, $isVisible);
-            if (!$stmt->execute()) {
-                echo ResponseAPI::error("Failed to save category: " . $stmt->error, 500);
-                exit;
-            }
-            
-            $configId = $db->insert_id;
-            
-            // Insert items
-            $itemSort = 0;
-            foreach ($items as $item) {
-                $label = trim($item['label'] ?? '');
-                $maxScore = floatval($item['max_score'] ?? 0);
-                if ($label) {
-                    $itemStmt = $db->prepare("
-                        INSERT INTO grade_item_config (category_config_id, label, max_score, sort_order)
-                        VALUES (?, ?, ?, ?)
-                    ");
-                    $itemStmt->bind_param("isdi", $configId, $label, $maxScore, $itemSort);
-                    $itemStmt->execute();
-                    $itemSort++;
-                }
-            }
-            
-            $sortOrder++;
+        // The real work is in saveCategoryConfigs() so it can be exercised without a
+        // logged-in HTTP request.
+        try {
+            saveCategoryConfigs($db, $classId, $period, is_array($configs) ? $configs : []);
+        } catch (\RuntimeException $e) {
+            echo ResponseAPI::error($e->getMessage(), 500);
+            exit;
         }
-        
-        // Sync to grade_category and grade_item tables
-        syncGradeTables($db, $classId, $period);
-        
+
         echo ResponseAPI::success([], "Grade categories saved");
     }
     elseif ($action === 'delete_category_config') {
@@ -2695,6 +2634,169 @@ try {
 } catch (\Exception | \Error $e) {
     ob_clean();
     echo ResponseAPI::error($e->getMessage(), 500);
+}
+
+/**
+ * Saves the category manager's payload as an in-place upsert.
+ *
+ * This used to delete every config for the class/period and re-insert it.
+ * Re-inserting hands out new grade_category_config, grade_item_config and
+ * grade_item ids on every save, and grade_score points at grade_item - so each
+ * save stranded every score already entered. removeSyncedConfigRows() "kept"
+ * those scores by nulling grade_category_id, but the grading table reads through
+ * that column, so the teacher simply saw an empty table.
+ *
+ * Matching each incoming config to its existing row by id and updating in place
+ * keeps every id, and therefore every grade_score, valid. Adding a category or
+ * editing a weight now costs nothing that was already recorded.
+ *
+ * @throws \RuntimeException on a write failure, so the caller can report it.
+ */
+function saveCategoryConfigs($db, $classId, $period, array $configs) {
+    $classId = intval($classId);
+    $period = ($period === 'final') ? 'final' : 'midterm';
+
+    $existingStmt = $db->prepare("SELECT id FROM grade_category_config WHERE class_section_id = ? AND period = ?");
+    $existingStmt->bind_param("is", $classId, $period);
+    $existingStmt->execute();
+    $existingConfigs = $existingStmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $existingIds = array_map('intval', array_column($existingConfigs, 'id'));
+    $existingSet = array_flip($existingIds);
+
+    $keptConfigIds = [];
+
+    $sortOrder = 0;
+    foreach ($configs as $config) {
+        $templateId = isset($config['template_id']) && intval($config['template_id']) > 0
+            ? intval($config['template_id'])
+            : null;
+        if ($templateId !== null) {
+            $templateCheck = $db->prepare("SELECT id FROM grade_category_template WHERE id = ? AND is_active = TRUE");
+            $templateCheck->bind_param("i", $templateId);
+            $templateCheck->execute();
+            if (!$templateCheck->get_result()->fetch_assoc()) {
+                $templateId = null;
+            }
+        }
+
+        $customName = trim($config['custom_name'] ?? '');
+        $weight = floatval($config['weight_percent'] ?? 0);
+        $itemCount = intval($config['item_count'] ?? 1);
+        $isVisible = isset($config['is_visible']) ? (bool)$config['is_visible'] : true;
+        $items = isset($config['items']) && is_array($config['items']) ? $config['items'] : [];
+        $perfectScore = array_sum(array_map(function ($item) {
+            return floatval($item['max_score'] ?? 0);
+        }, $items));
+
+        // Only reuse an id that really belongs to this class and period, so a stale
+        // or hand-edited payload cannot retarget another class's row.
+        $incomingId = intval($config['id'] ?? 0);
+        $configId = ($incomingId > 0 && isset($existingSet[$incomingId])) ? $incomingId : 0;
+
+        if ($configId > 0) {
+            $stmt = $db->prepare("
+                UPDATE grade_category_config
+                SET template_id = ?, custom_name = ?, weight_percent = ?,
+                    perfect_score = ?, item_count = ?, sort_order = ?, is_visible = ?
+                WHERE id = ? AND class_section_id = ? AND period = ?
+            ");
+            // Types follow the placeholder order: template_id, custom_name,
+            // weight_percent, perfect_score, item_count, sort_order, is_visible,
+            // then id, class_section_id, period.
+            $stmt->bind_param("ssddiiiiis", $templateId, $customName, $weight,
+                $perfectScore, $itemCount, $sortOrder, $isVisible, $configId, $classId, $period);
+        } else {
+            $stmt = $db->prepare("
+                INSERT INTO grade_category_config (class_section_id, period, template_id, custom_name, weight_percent, perfect_score, item_count, sort_order, is_visible)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $stmt->bind_param("isisddiii", $classId, $period, $templateId, $customName, $weight, $perfectScore, $itemCount, $sortOrder, $isVisible);
+        }
+
+        if (!$stmt->execute()) {
+            throw new \RuntimeException('Failed to save category: ' . $stmt->error);
+        }
+        if ($configId === 0) {
+            $configId = intval($db->insert_id);
+        }
+
+        $keptConfigIds[] = $configId;
+        syncCategoryItems($db, $configId, $items);
+        $sortOrder++;
+    }
+
+    // Configs the teacher deleted outright. Still the old helper: it detaches scored
+    // items rather than deleting them, and clears grade_category.config_id so the row
+    // can go despite that FK having no cascade.
+    $removedConfigIds = array_values(array_diff($existingIds, $keptConfigIds));
+    if (!empty($removedConfigIds)) {
+        removeSyncedConfigRows($db, $removedConfigIds);
+        $removeList = implode(',', array_map('intval', $removedConfigIds));
+        $db->query("DELETE FROM grade_category_config WHERE id IN ($removeList)");
+    }
+
+    syncGradeTables($db, $classId, $period);
+}
+
+/**
+ * Reconcile one config's items against the incoming list, keeping the id of every
+ * item that survives so its grade_item - and therefore its grade_score - stays put.
+ *
+ * Items are matched by label because the category dialog only sends label and
+ * max_score. An item the teacher removed is deleted, unless it holds recorded
+ * scores: grade_item.item_config_id has no ON DELETE, so the row has to be
+ * detached first. Detaching keeps the scores in the database but takes the item
+ * out of the grading table, which is the intended result of deleting an item.
+ */
+function syncCategoryItems($db, $configId, array $items) {
+    $itemStmt = $db->prepare("SELECT id, label FROM grade_item_config WHERE category_config_id = ? ORDER BY sort_order");
+    $itemStmt->bind_param("i", $configId);
+    $itemStmt->execute();
+
+    // Keyed by trimmed label so " Quiz 1 " matches the stored "Quiz 1".
+    $existingByLabel = [];
+    foreach ($itemStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $row) {
+        $existingByLabel[trim($row['label'])] = intval($row['id']);
+    }
+
+    $keptItemIds = [];
+    $itemSort = 0;
+    foreach ($items as $item) {
+        $label = trim($item['label'] ?? '');
+        if ($label === '') {
+            continue;
+        }
+        $maxScore = floatval($item['max_score'] ?? 0);
+
+        if (isset($existingByLabel[$label])) {
+            $itemConfigId = $existingByLabel[$label];
+            $upd = $db->prepare("UPDATE grade_item_config SET label = ?, max_score = ?, sort_order = ? WHERE id = ? AND category_config_id = ?");
+            $upd->bind_param("sdiii", $label, $maxScore, $itemSort, $itemConfigId, $configId);
+            $upd->execute();
+        } else {
+            $ins = $db->prepare("INSERT INTO grade_item_config (category_config_id, label, max_score, sort_order) VALUES (?, ?, ?, ?)");
+            $ins->bind_param("isdi", $configId, $label, $maxScore, $itemSort);
+            if (!$ins->execute()) {
+                throw new \RuntimeException('Failed to save item: ' . $ins->error);
+            }
+            $itemConfigId = intval($db->insert_id);
+        }
+
+        $keptItemIds[] = $itemConfigId;
+        $itemSort++;
+    }
+
+    // Items the teacher removed from this category.
+    $removedItemIds = array_values(array_diff(array_values($existingByLabel), $keptItemIds));
+    foreach ($removedItemIds as $removedId) {
+        // Clear the restrict FK, preferring to keep the row when scores depend on it.
+        $db->query("UPDATE grade_item SET item_config_id = NULL
+                    WHERE item_config_id = $removedId
+                      AND id IN (SELECT DISTINCT grade_item_id FROM grade_score)");
+        $db->query("DELETE FROM grade_item WHERE item_config_id = $removedId
+                    AND id NOT IN (SELECT grade_item_id FROM grade_score)");
+        $db->query("DELETE FROM grade_item_config WHERE id = $removedId AND category_config_id = $configId");
+    }
 }
 
 // Helper function to sync grade_category and grade_item from configs
@@ -3282,10 +3384,10 @@ function attendanceSheetHtml($db, $class, $students, $sessions) {
     $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
     $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
 
-    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $logoPath = __DIR__ . '/../assets/images/capsu.jpg';
     $footerPath = __DIR__ . '/../assets/images/footer.png';
     $logoSrc = file_exists($logoPath)
-        ? '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath)
+        ? '/thesisEgrading/webapp/assets/images/capsu.jpg?v=' . filemtime($logoPath)
         : '';
     $footerSrc = file_exists($footerPath)
         ? '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath)
@@ -3306,7 +3408,7 @@ function attendanceSheetHtml($db, $class, $students, $sessions) {
         .page > * { flex: 0 0 auto; }
         .page:last-child { break-after: auto; page-break-after: auto; }
         @media print { .page { margin: 0; box-shadow: none; } }
-        .header-image { width: 100%; height: auto; margin-bottom: 8px; display: block; }
+        .header-image { display: block; height: 30mm; width: auto; max-width: 100%; margin: 0 auto 8px; }
         .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 10pt; }
         .course-info-left, .course-info-right { display: flex; flex-direction: column; gap: 2px; }
         .course-info-right { text-align: right; }
@@ -3802,7 +3904,7 @@ function generateGradingSheetExcel($class, $gradesData) {
     fputcsv($output, []); // empty row
 
     // Table headers
-    fputcsv($output, ['No.', 'Name of Students (Last, First, MI)', 'Midterm Rating', 'Midterm Remarks', 'Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks']);
+    fputcsv($output, ['No.', 'Name of Students (Last, First, MI)', 'Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks']);
 
     foreach ($gradesData as $i => $student) {
         $name = trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_initial'] ?? '') . '.');
@@ -3862,7 +3964,7 @@ function gradingSheetPageCss() {
             #classRecordPreview { background: #fff; padding: 0; overflow: visible; }
             .page { margin: 0; box-shadow: none; }
         }
-        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
+        .header-image { display: block; height: 30mm; width: auto; max-width: 100%; margin: 0 auto 12px; }
         .course-info { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
         .course-info-left { display: flex; flex-direction: column; gap: 2px; }
         .course-info-right { display: flex; flex-direction: column; gap: 2px; text-align: right; }
@@ -3870,9 +3972,9 @@ function gradingSheetPageCss() {
         .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 4px 5px; text-align: center; vertical-align: middle; }
         .grade-sheet th { background: #d9d9d9; font-weight: bold; }
-        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
-        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
-        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 39%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6) { width: 14%; }
+        .grade-sheet td.name { text-align: left; }
         /* auto margin pins the footer to the bottom of its own sheet. */
         .footer-image { width: 100%; max-width: 100%; height: auto; margin-top: auto; padding-top: 20px; display: block; break-inside: avoid; page-break-inside: avoid; }
     ';
@@ -3900,12 +4002,12 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
     $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
     $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
 
-    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $logoPath = __DIR__ . '/../assets/images/capsu.jpg';
     $footerPath = __DIR__ . '/../assets/images/footer.png';
     $logoPublicUrl = '';
     $footerPublicUrl = '';
     if (file_exists($logoPath)) {
-        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath);
+        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/capsu.jpg?v=' . filemtime($logoPath);
     }
     if (file_exists($footerPath)) {
         $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
@@ -3934,19 +4036,23 @@ function gradingSheetHtml($class, $gradesData, $excelMode = false) {
         $html .= '<div class="course-info-right"><span><strong>' . $semester . ' Semester/Semester AY ' . $academicYear . '</strong></span><span><strong>Course and Year:</strong> ' . $program . ' ' . $year . '-' . $section . '</span></div>';
         $html .= '</div>';
 
-        $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+        $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
 
         $startIdx = $page * $studentsPerPage;
         $endIdx = min($startIdx + $studentsPerPage, $totalStudents);
         for ($i = $startIdx; $i < $endIdx; $i++) {
             $student = $gradesData[$i];
             $name = htmlspecialchars(trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
-            $midtermRating = round($student['midterm']['grade'] ?? 0);
-            $midtermRemarks = htmlspecialchars($student['midterm']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
-            $finalRating = round($student['final']['grade'] ?? 0);
-            $finalGrade = htmlspecialchars((string)($student['overall']['grade_point'] ?? 'INC'), ENT_QUOTES, 'UTF-8');
-            $remarks = htmlspecialchars($student['overall']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
-            $html .= '<tr><td>' . ($i + 1) . '</td><td class="name">' . $name . '</td><td>' . ($midtermRating ?: 'INC') . '</td><td>' . $midtermRemarks . '</td><td>' . ($finalRating ?: 'INC') . '</td><td>' . $finalGrade . '</td><td>3</td><td>' . $remarks . '</td></tr>';
+            // Overall unrounded score, so the sheet prints 87.3 rather than 87,
+            // and the grade point converted from that exact value.
+            $overallRaw = floatval($student['overall']['grade_raw'] ?? 0);
+            $isComplete = !empty($student['overall']['complete']);
+            $finalRating = $overallRaw > 0 ? gradesheet_format_score($overallRaw) : '';
+            $finalGrade = !$isComplete ? 'INC'
+                : ($overallRaw > 0 ? number_format(GradingHelper::getGradePoint($overallRaw), 2) : 'INC');
+            $unitCredit = $isComplete ? 3 : '';
+            $remarks = htmlspecialchars(gradesheet_remarks_text($student['overall']['remarks'] ?? 'INC'), ENT_QUOTES, 'UTF-8');
+            $html .= '<tr><td>' . ($i + 1) . '</td><td class="name">' . $name . '</td><td>' . ($finalRating ?: 'INC') . '</td><td>' . $finalGrade . '</td><td>' . $unitCredit . '</td><td>' . $remarks . '</td></tr>';
         }
         $html .= '</tbody></table>';
         if ($footerSrc) {
@@ -3966,12 +4072,12 @@ function gradingSheetExcel($class, $gradesData) {
     $academicYear = htmlspecialchars($class['academic_year'] ?? '', ENT_QUOTES, 'UTF-8');
     $semester = ((int)($class['semester'] ?? 1) === 2) ? '2nd' : '1st';
 
-    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $logoPath = __DIR__ . '/../assets/images/capsu.jpg';
     $footerPath = __DIR__ . '/../assets/images/footer.png';
     $logoPublicUrl = '';
     $footerPublicUrl = '';
     if (file_exists($logoPath)) {
-        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath);
+        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/capsu.jpg?v=' . filemtime($logoPath);
     }
     if (file_exists($footerPath)) {
         $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
@@ -3986,10 +4092,10 @@ function gradingSheetExcel($class, $gradesData) {
         .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 6px 8px; text-align: center; vertical-align: middle; }
         .grade-sheet th { background: #d9d9d9; font-weight: bold; }
-        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
-        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
-        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
-        .header-image { width: 100%; max-width: 100%; height: auto; margin-bottom: 12px; display: block; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 39%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6) { width: 14%; }
+        .grade-sheet td.name { text-align: left; }
+        .header-image { display: block; height: 30mm; width: auto; max-width: 100%; margin: 0 auto 12px; }
         .footer-image { width: 100%; max-width: 100%; height: auto; margin-top: 20px; display: block; }
     </style></head><body>';
 
@@ -4001,16 +4107,20 @@ function gradingSheetExcel($class, $gradesData) {
     $html .= '<div class="course-info-right"><span><strong>' . $semester . ' Semester/Semester AY ' . $academicYear . '</strong></span><span><strong>Course and Year:</strong> ' . $program . ' ' . $year . '-' . $section . '</span></div>';
     $html .= '</div>';
 
-    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
 
     foreach ($gradesData as $i => $student) {
         $name = htmlspecialchars(trim(($student['last_name'] ?? '') . ', ' . ($student['first_name'] ?? '') . ' ' . ($student['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
-        $midtermRating = round($student['midterm']['grade'] ?? 0);
-        $midtermRemarks = htmlspecialchars($student['midterm']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
-        $finalRating = round($student['final']['grade'] ?? 0);
-        $finalGrade = htmlspecialchars((string)($student['overall']['grade_point'] ?? 'INC'), ENT_QUOTES, 'UTF-8');
-        $remarks = htmlspecialchars($student['overall']['remarks'] ?? 'INC', ENT_QUOTES, 'UTF-8');
-        $html .= '<tr><td>' . ($i + 1) . '</td><td class="name">' . $name . '</td><td>' . ($midtermRating ?: 'INC') . '</td><td>' . $midtermRemarks . '</td><td>' . ($finalRating ?: 'INC') . '</td><td>' . $finalGrade . '</td><td>3</td><td>' . $remarks . '</td></tr>';
+        // Overall unrounded score, so the sheet prints 87.3 rather than 87,
+        // and the grade point converted from that exact value.
+        $overallRaw = floatval($student['overall']['grade_raw'] ?? 0);
+        $isComplete = !empty($student['overall']['complete']);
+        $finalRating = $overallRaw > 0 ? gradesheet_format_score($overallRaw) : '';
+        $finalGrade = !$isComplete ? 'INC'
+            : ($overallRaw > 0 ? number_format(GradingHelper::getGradePoint($overallRaw), 2) : 'INC');
+        $unitCredit = $isComplete ? 3 : '';
+        $remarks = htmlspecialchars(gradesheet_remarks_text($student['overall']['remarks'] ?? 'INC'), ENT_QUOTES, 'UTF-8');
+        $html .= '<tr><td>' . ($i + 1) . '</td><td class="name">' . $name . '</td><td>' . ($finalRating ?: 'INC') . '</td><td>' . $finalGrade . '</td><td>' . $unitCredit . '</td><td>' . $remarks . '</td></tr>';
     }
     if ($footerPublicUrl) {
         $html .= '<img class="footer-image" src="' . $footerPublicUrl . '" alt="Footer">';
@@ -4043,15 +4153,13 @@ function exportGradingSheetCsv($templateId) {
     fputcsv($output, []); // empty row
     
     // Table headers
-    fputcsv($output, ['No.', 'Name of Students (Last, First, MI)', 'Midterm Rating', 'Midterm Remarks', 'Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks']);
+    fputcsv($output, ['No.', 'Name of Students (Last, First, MI)', 'Numerical Rating', 'Final Grade', 'Unit Credit', 'Remarks']);
     
     foreach ($items as $i => $item) {
         $name = trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.');
         fputcsv($output, [
             $item['student_number'] ?? $i + 1,
             $name,
-            $item['midterm_rating'],
-            $item['midterm_remarks'],
             $item['numerical_rating'],
             $item['final_grade'],
             $item['unit_credit'] ?? 3,
@@ -4084,9 +4192,9 @@ function exportGradingSheetXlsx($templateId) {
         .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 6px 8px; text-align: center; vertical-align: middle; }
         .grade-sheet th { background: #d9d9d9; font-weight: bold; }
-        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
-        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
-        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 39%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6) { width: 14%; }
+        .grade-sheet td.name { text-align: left; }
     </style></head><body>';
     
     $html .= '<div class="course-info">';
@@ -4094,11 +4202,11 @@ function exportGradingSheetXlsx($templateId) {
     $html .= '<div class="course-info-right"><span><strong>' . htmlspecialchars($template['semester']) . ' Semester/Semester AY ' . htmlspecialchars($template['academic_year']) . '</strong></span><span><strong>Course and Year:</strong> ' . htmlspecialchars($template['course_year_section']) . '</span></div>';
     $html .= '</div>';
     
-    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
     
     foreach ($items as $item) {
         $name = htmlspecialchars(trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
-        $html .= '<tr><td>' . ($item['student_number'] ?? '') . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['midterm_rating']) . '</td><td>' . htmlspecialchars($item['midterm_remarks']) . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
+        $html .= '<tr><td>' . ($item['student_number'] ?? '') . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
     }
     echo $html . '</tbody></table></body></html>';
 }
@@ -4125,9 +4233,9 @@ function exportGradingSheetDoc($templateId) {
         .grade-sheet { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .grade-sheet th, .grade-sheet td { border: 1px solid #000; padding: 6px 8px; text-align: center; vertical-align: middle; }
         .grade-sheet th { background: #d9d9d9; font-weight: bold; }
-        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 34%; }
-        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6), .grade-sheet th:nth-child(7) { width: 10%; }
-        .grade-sheet th:nth-child(8) { width: 8%; }.grade-sheet td.name { text-align: left; }
+        .grade-sheet th:nth-child(1) { width: 5%; }.grade-sheet th:nth-child(2) { width: 39%; }
+        .grade-sheet th:nth-child(3), .grade-sheet th:nth-child(4), .grade-sheet th:nth-child(5), .grade-sheet th:nth-child(6) { width: 14%; }
+        .grade-sheet td.name { text-align: left; }
     </style></head><body>';
     
     $html .= '<div class="course-info">';
@@ -4135,11 +4243,11 @@ function exportGradingSheetDoc($templateId) {
     $html .= '<div class="course-info-right"><span><strong>' . htmlspecialchars($template['semester']) . ' Semester/Semester AY ' . htmlspecialchars($template['academic_year']) . '</strong></span><span><strong>Course and Year:</strong> ' . htmlspecialchars($template['course_year_section']) . '</span></div>';
     $html .= '</div>';
     
-    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+    $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
     
     foreach ($items as $item) {
         $name = htmlspecialchars(trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
-        $html .= '<tr><td>' . ($item['student_number'] ?? '') . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['midterm_rating']) . '</td><td>' . htmlspecialchars($item['midterm_remarks']) . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
+        $html .= '<tr><td>' . ($item['student_number'] ?? '') . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
     }
     echo $html . '</tbody></table></body></html>';
 }
@@ -4154,12 +4262,12 @@ function exportGradingSheetPdf($templateId) {
     
     $items = $db->query("SELECT * FROM grading_sheet_items WHERE template_id = $templateId ORDER BY page_number, row_order")->fetch_all(MYSQLI_ASSOC);
     
-    $logoPath = __DIR__ . '/../assets/images/header.png';
+    $logoPath = __DIR__ . '/../assets/images/capsu.jpg';
     $footerPath = __DIR__ . '/../assets/images/footer.png';
     $logoPublicUrl = '';
     $footerPublicUrl = '';
     if (file_exists($logoPath)) {
-        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/header.png?v=' . filemtime($logoPath);
+        $logoPublicUrl = '/thesisEgrading/webapp/assets/images/capsu.jpg?v=' . filemtime($logoPath);
     }
     if (file_exists($footerPath)) {
         $footerPublicUrl = '/thesisEgrading/webapp/assets/images/footer.png?v=' . filemtime($footerPath);
@@ -4184,14 +4292,14 @@ function exportGradingSheetPdf($templateId) {
         $html .= '<div class="course-info-right"><span><strong>' . htmlspecialchars($template['semester']) . ' Semester/Semester AY ' . htmlspecialchars($template['academic_year']) . '</strong></span><span><strong>Course and Year:</strong> ' . htmlspecialchars($template['course_year_section']) . '</span></div>';
         $html .= '</div>';
         
-        $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Midterm<br>Rating</th><th>Midterm<br>Remarks</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
+        $html .= '<table class="grade-sheet"><thead><tr><th>No.</th><th>Name of Students<br>(Last, First, MI)</th><th>Numerical<br>Rating</th><th>Final<br>Grade</th><th>Unit<br>Credit</th><th>Remarks</th></tr></thead><tbody>';
         
         $startIdx = $page * $studentsPerPage;
         $endIdx = min($startIdx + $studentsPerPage, $totalItems);
         for ($i = $startIdx; $i < $endIdx; $i++) {
             $item = $items[$i];
             $name = htmlspecialchars(trim(($item['last_name'] ?? '') . ', ' . ($item['first_name'] ?? '') . ' ' . ($item['middle_initial'] ?? '') . '.'), ENT_QUOTES, 'UTF-8');
-            $html .= '<tr><td>' . ($item['student_number'] ?? $i + 1) . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['midterm_rating']) . '</td><td>' . htmlspecialchars($item['midterm_remarks']) . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
+            $html .= '<tr><td>' . ($item['student_number'] ?? $i + 1) . '</td><td class="name">' . $name . '</td><td>' . htmlspecialchars($item['numerical_rating']) . '</td><td>' . htmlspecialchars($item['final_grade']) . '</td><td>' . ($item['unit_credit'] ?? 3) . '</td><td>' . htmlspecialchars($item['remarks']) . '</td></tr>';
         }
         $html .= '</tbody></table>';
         if ($footerPublicUrl) {

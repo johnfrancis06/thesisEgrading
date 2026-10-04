@@ -10,9 +10,16 @@ if (!defined('GRADING_SHEET_STUDENTS_PER_PAGE')) {
 
 class GradingHelper {
     // Equivalent score is the raw score expressed as a percentage of the perfect score.
+    //
+    // Clamped to 100: transmutation expresses a raw score against the perfect score,
+    // and no student can exceed the perfect score. Without the cap a category whose
+    // stored scores outrun its max_score - which happens when an item's max is lowered
+    // after grades are entered - reported 800% and inflated the weighted grade.
     public static function transmute($rawScore, $maxScore) {
         if ($maxScore <= 0) return 0;
-        return ($rawScore / $maxScore) * 100;
+        $pct = ($rawScore / $maxScore) * 100;
+        if (!is_finite($pct)) return 0;
+        return min(100, max(0, $pct));
     }
     
     // Grade point lookuphhhh table (Philippine 1.00-5.00 scale)
@@ -90,10 +97,10 @@ class GradingHelper {
         return 0;
     }
     
-    // Calculate overall final grade
-    // If both midterm and final are complete: Overall = (Final × finalWeight) + (Midterm × midtermWeight)
-    // If only one period complete: use that period's grade
-    public static function calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete = false, $finalComplete = false, $periodWeights = null) {
+    // Weighted blend of the two period grades, WITHOUT rounding.
+    // Shared by calculateOverallGrade (which rounds) and by reports that print the
+    // unrounded score next to the grade point converted from it.
+    public static function blendOverallGrade($midtermGrade, $finalGrade, $midtermComplete = false, $finalComplete = false, $periodWeights = null) {
         $midtermShare = $periodWeights['midterm'] ?? 0.4;
         $finalShare = $periodWeights['final'] ?? 0.6;
 
@@ -108,13 +115,21 @@ class GradingHelper {
         }
 
         if ($midtermComplete && $finalComplete) {
-            return round(($finalGrade * $finalShare) + ($midtermGrade * $midtermShare), 0);
-        } elseif ($midtermComplete) {
-            return round($midtermGrade, 0);
-        } elseif ($finalComplete) {
-            return round($finalGrade, 0);
+            return ($finalGrade * $finalShare) + ($midtermGrade * $midtermShare);
         }
+
+        // One period short of a final result: the overall is 0 and the caller
+        // marks it INC. Substituting the completed period here would print the
+        // midterm as though it were the final grade, which is the mistake this
+        // guards against - a 40% midterm is not a final standing.
         return 0;
+    }
+
+    // Calculate overall final grade
+    // Both midterm and final complete: Overall = (Final × finalWeight) + (Midterm × midtermWeight)
+    // Otherwise 0, and the remarks become INC: a missing final cannot be blended.
+    public static function calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete = false, $finalComplete = false, $periodWeights = null) {
+        return round(self::blendOverallGrade($midtermGrade, $finalGrade, $midtermComplete, $finalComplete, $periodWeights), 0);
     }
 
     // Read the midterm/final weights configured for a class
@@ -183,12 +198,17 @@ class GradingHelper {
     public static function calculateStudentGrades($db, $classId, $studentId) {
         // Get all raw scores for this student in this class
         $scope = self::getCategoryScope($db, $classId);
+        // gcc is joined so a custom category can be told apart from a template one:
+        // only a template category may be folded onto one of the four canonical
+        // components. See mapCategoryToComponent.
         $sql = "
             SELECT gi.id, gi.label, gi.max_score, gi.grade_category_id,
                    gc.name as category_name, gc.period, gc.weight_percent,
+                   gcc.template_id as template_id,
                    gs.raw_score
             FROM grade_item gi
             JOIN grade_category gc ON gi.grade_category_id = gc.id
+            LEFT JOIN grade_category_config gcc ON gcc.id = gc.config_id
             LEFT JOIN grade_score gs ON gs.grade_item_id = gi.id AND gs.student_id = ?
             WHERE gc.class_section_id = ?
               AND $scope
@@ -211,8 +231,9 @@ class GradingHelper {
             $period = $row['period'];
             $categoryName = strtolower($row['category_name']);
             
-            // Map category name to component type
-            $componentType = self::mapCategoryToComponent($categoryName);
+            // Map category name to component type. The template id decides: only canonical
+            // templates are folded, a custom category keeps its own key.
+            $componentType = self::mapCategoryToComponent($categoryName, $row['template_id']);
             if (!$componentType) continue;
             
             if (!isset($periodData[$period][$componentType])) {
@@ -262,26 +283,32 @@ class GradingHelper {
         }
         
         // Use the configured category weights for each period.
+        // Joined to grade_category_config for template_id: a weight has to be keyed
+        // exactly the way its component scores are, or calculatePeriodGrade treats
+        // the component as unweighted and drops it from the period grade.
         $periodWeights = ['midterm' => [], 'final' => []];
-        $weightSql = "SELECT period, name, weight_percent FROM grade_category
-                      WHERE class_section_id = ? AND config_id IS NOT NULL";
+        $weightSql = "SELECT gc.period, gc.name, gc.weight_percent, gcc.template_id
+                      FROM grade_category gc
+                      LEFT JOIN grade_category_config gcc ON gcc.id = gc.config_id
+                      WHERE gc.class_section_id = ? AND gc.config_id IS NOT NULL";
         $weightStmt = $db->prepare($weightSql);
         $weightStmt->bind_param("i", $classId);
         $weightStmt->execute();
         foreach ($weightStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $weightRow) {
-            $component = self::mapCategoryToComponent(strtolower($weightRow['name']));
+            $component = self::mapCategoryToComponent(strtolower($weightRow['name']), $weightRow['template_id']);
             if ($component && isset($periodWeights[$weightRow['period']])) {
                 $periodWeights[$weightRow['period']][$component] = floatval($weightRow['weight_percent']) / 100;
             }
         }
 
         // Categories that exist without a synced config still carry their own weight.
+        // They have no template_id, which is how calculateStudentGrades sees them too.
         $legacyStmt = $db->prepare("SELECT period, name, weight_percent FROM grade_category
                                     WHERE class_section_id = ? AND config_id IS NULL");
         $legacyStmt->bind_param("i", $classId);
         $legacyStmt->execute();
         foreach ($legacyStmt->get_result()->fetch_all(MYSQLI_ASSOC) as $weightRow) {
-            $component = self::mapCategoryToComponent(strtolower($weightRow['name']));
+            $component = self::mapCategoryToComponent(strtolower($weightRow['name']), null);
             if ($component && isset($periodWeights[$weightRow['period']])
                 && !isset($periodWeights[$weightRow['period']][$component])) {
                 $periodWeights[$weightRow['period']][$component] = floatval($weightRow['weight_percent']) / 100;
@@ -309,6 +336,9 @@ class GradingHelper {
         $midtermGrade = self::calculatePeriodGrade($componentScores['midterm'], $periodData['midterm'], $periodWeights['midterm']);
         $finalGrade = self::calculatePeriodGrade($componentScores['final'], $periodData['final'], $periodWeights['final']);
         $overallGrade = self::calculateOverallGrade($midtermGrade, $finalGrade, $midtermComplete, $finalComplete, $classWeights);
+        // Same blend, unrounded. Reported next to the grade point converted from
+        // it; no existing consumer reads this, so stored grades are unaffected.
+        $overallRaw = self::blendOverallGrade($midtermGrade, $finalGrade, $midtermComplete, $finalComplete, $classWeights);
         
         // Get grade points
         $midtermGradePoint = self::getGradePointFromDB($db, $midtermGrade);
@@ -338,6 +368,7 @@ class GradingHelper {
             ],
             'overall' => [
                 'grade' => $overallGrade,
+                'grade_raw' => round($overallRaw, 2),
                 'grade_point' => $overallGradePoint,
                 'remarks' => self::getRemarks($overallGradePoint, $overallCompleteness['overall'], $isDropped),
                 'complete' => $overallCompleteness['overall']
@@ -352,9 +383,18 @@ class GradingHelper {
     public static function checkCompleteness($periodData, $perfectScores) {
         $completeness = ['midterm' => [], 'final' => []];
         $requiredComponents = ['class_participation', 'problem_set', 'quizzes', 'periodical_exam'];
-        
+
         foreach (['midterm', 'final'] as $period) {
-            foreach ($requiredComponents as $component) {
+            // Walk the canonical components *and* whatever else this class actually
+            // has. A custom category keyed by its own slug is absent from the
+            // canonical list, and skipping it here would let a half-graded custom
+            // category pass as complete.
+            $components = array_unique(array_merge(
+                $requiredComponents,
+                array_keys($periodData[$period] ?? [])
+            ));
+
+            foreach ($components as $component) {
                 $data = $periodData[$period][$component] ?? null;
                 
                 if (!$data) {
@@ -421,21 +461,39 @@ class GradingHelper {
     }
     
     // Map category name to component type
-    private static function mapCategoryToComponent($categoryName) {
+    //
+    // Only a canonical template category may be folded onto one of the four
+    // components. A custom category always keeps a key derived from its own name.
+    //
+    // Folding by keyword regardless of origin is what made the EQUIV column overflow:
+    // a custom "Practical exam" was filed under periodical_exam, so the grading sheet
+    // summed the Periodical Exam column's items and the Practical exam column's items
+    // into one total while dividing by a single perfect score - 1100% for a category
+    // worth 10. Custom categories carry their own weight and their own perfect score,
+    // so they need their own key.
+    //
+    // @param string|null $templateId grade_category_config.template_id, null when the
+    //                                 grade_category row is a legacy unsynced one.
+    private static function mapCategoryToComponent($categoryName, $templateId = null) {
         $name = strtolower($categoryName);
-        if (strpos($name, 'standing') !== false || strpos($name, 'participation') !== false || strpos($name, 'class standing') !== false) {
-            return 'class_participation';
+
+        // Templates 1-4 are the canonical components. A teacher-made template is not,
+        // so it falls through to a name-derived key and cannot hijack a canonical slot.
+        if (in_array(intval($templateId), [1, 2, 3, 4], true)) {
+            if (strpos($name, 'standing') !== false || strpos($name, 'participation') !== false) {
+                return 'class_participation';
+            }
+            if (strpos($name, 'problem') !== false) {
+                return 'problem_set';
+            }
+            if (strpos($name, 'quiz') !== false) {
+                return 'quizzes';
+            }
+            if (strpos($name, 'exam') !== false || strpos($name, 'periodical') !== false) {
+                return 'periodical_exam';
+            }
         }
-        if (strpos($name, 'problem') !== false || strpos($name, 'problem set') !== false) {
-            return 'problem_set';
-        }
-        if (strpos($name, 'quiz') !== false) {
-            return 'quizzes';
-        }
-        if (strpos($name, 'exam') !== false || strpos($name, 'periodical') !== false) {
-            return 'periodical_exam';
-        }
-        // Keep custom category names addressable by the dynamic grading sheet.
+
         $customKey = preg_replace('/[^a-z0-9]+/', '_', $name);
         return trim($customKey, '_') ?: null;
     }

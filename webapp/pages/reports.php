@@ -36,7 +36,7 @@ $sheetPrintCss = gradesheet_print_css();
     <title><?= $sheetData ? htmlspecialchars($sheetData['meta']['course_number']) . ' - Grade Sheet' : 'Reports' ?> - <?= APP_NAME ?></title>
     <link href="assets/vendor/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="assets/vendor/bootstrap-icons.css">
-    <link rel="stylesheet" href="assets/css/style.css?v=8">
+    <link rel="stylesheet" href="assets/css/style.css?v=18">
     <style>
         <?= $sheetCss ?>
         .gs-preview-host { background: #e9ecef; padding: 16mm 12px; overflow-x: auto; }

@@ -162,7 +162,7 @@ $sectionStyle->setMarginRight(567);
 
 $section->setStyle($sectionStyle);
 
-$logoPath = __DIR__ . '/assets/img/csu-logo.png';
+$logoPath = __DIR__ . '/assets/images/capsu.jpg';
 $haveLogo = is_file($logoPath);
 
 /** Converts a percentage of the usable width into twips. */
@@ -172,14 +172,24 @@ function gradesheet_twips($percent) {
 
 $headerWidths = array_map('gradesheet_twips', [20, 45, 35]);
 $infoWidths   = array_map('gradesheet_twips', [50, 50]);
-$sigWidths    = array_map('gradesheet_twips', [33, 34, 33]);
-$scaleWidths  = array_map('gradesheet_twips', [20, 80]);
+// Three cells matching the HTML footer's 22 / 26 / 52 split. The four 22 /
+    // 23 / 33 / 22 arrays no longer apply: Submitted by moved out of the band
+    // and sits between the certification and these cells.
+$scaleWidths = array_map('gradesheet_twips', [22]);
+$notedWidths = array_map('gradesheet_twips', [26]);
+$deanWidths  = array_map('gradesheet_twips', [52]);
 // Must sum to 100% and match gradesheet_template.php so the Word table lines up
 // with the browser and PDF versions.
-$colWidths    = array_map('gradesheet_twips', [5, 34, 10.1667, 10.1667, 10.1667, 10.1667, 10.1667, 10.1667]);
+$colWidths    = array_map('gradesheet_twips', [5, 39, 14, 14, 14, 14]);
 
 $bodyStyle = ['size' => 9];
 $headStyle = ['bold' => true, 'size' => 9];
+// Every grade column is centred except the name, which is left-aligned. This
+// mirrors the .gs-table rules in gradesheet_template.php; without it the Word
+// file renders left-aligned numbers against a centred browser and PDF sheet.
+$bodyCenter = ['jc' => 'center'];
+$headCenter = array_merge($headStyle, $bodyCenter);
+$nameStyle = ['size' => 9];
 $headCell  = ['bgColor' => 'D9D9D9'];
 // tblHeader repeats the two heading rows if a table breaks across pages.
 $headRowStyle = ['tblHeader' => true];
@@ -232,12 +242,13 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $table = gradesheet_docx_table($section, $borderedTable);
 
     $table->addRow(240, $headRowStyle);
-    foreach (['No.', 'Name of Students', 'Midterm', 'Midterm', 'Numerical', 'Final', 'Unit', 'Remarks'] as $i => $label) {
-        $table->addCell($colWidths[$i], $headCell)->addText($label, $headStyle);
+    foreach (['No.', 'Name of Students', 'Numerical', 'Final', 'Unit', 'Remarks'] as $i => $label) {
+        $table->addCell($colWidths[$i], $headCell)->addText($label, $headCenter);
     }
     $table->addRow(240, $headRowStyle);
-    foreach (['', '(Last, First, MI)', 'Rating', 'Remarks', 'Rating', 'Grade', 'Credit', ''] as $i => $label) {
-        $table->addCell($colWidths[$i], $headCell)->addText($label, $headStyle);
+    foreach (['', '(Last, First, MI)', 'Rating', 'Grade', 'Credit', ''] as $i => $label) {
+        $style = ($i === 1) ? $headStyle : $headCenter;
+        $table->addCell($colWidths[$i], $headCell)->addText($label, $style);
     }
 
     foreach ($pageRows as $offset => $row) {
@@ -245,54 +256,72 @@ foreach ($chunks as $pageIndex => $pageRows) {
         $values = array_merge(
             [(string) ($pageIndex * $perPage + $offset + 1), (string) $row['name']],
             array_map('strval', [
-                $row['midterm_rating'], $row['midterm_remarks'], $row['numerical_rating'],
-                $row['final_grade'],   $row['unit_credit'],    $row['remarks'],
+                $row['numerical_rating'], $row['final_grade'],
+                $row['unit_credit'],     $row['remarks'],
             ])
         );
         foreach ($values as $i => $value) {
-            $table->addCell($colWidths[$i])->addText($value, $bodyStyle);
+            $style = ($i === 1) ? $bodyStyle : $bodyCenter;
+            $table->addCell($colWidths[$i])->addText($value, $style);
         }
     }
 
     // ---- Certification, signatures and grading scale ---------------------
-    // Every sheet carries the footer, matching the browser and PDF output.
+    // Every sheet carries the footer, matching the browser and PDF output:
+    // certification top-left, grading scale on the left, signatures right.
     $section->addText('');
-    $section->addText($meta['certification'], ['size' => 10]);
+    $section->addText($meta['certification'], ['size' => 9]);
     $section->addText('');
 
-    // The signature rule is an underline on the value itself, so the table
-    // can stay borderless and still read correctly.
-    $lineStyle = ['size' => 10, 'bold' => true, 'u' => 'single'];
-    $roleStyle = ['size' => 8];
-    $labelStyle = ['size' => 8.5];
+    // Names are plain bold text - no underline rule, no border.
+    $nameStyle = ['size' => 10.5, 'bold' => true];
+    $roleStyle = ['size' => 8.5];
+    $labelStyle = ['size' => 9];
+    // Signature blocks are centred, matching the HTML footer's centred columns.
+    $center = ['jc' => 'center'];
 
-    $columns = [
-        ['Submitted by:', [['facilitator_name', 'Course Facilitator']]],
-        ['Noted:',       [['program_chair', 'Program Chair'], ['dean', 'Dean']]],
-        ['Received:',    [['registrar', 'Registrar'], ['date_received', 'Date']]],
-    ];
+// Submitted by sits between the certification text and the band, matching
+// gradesheet_template.php. Word needs a real table for a centred block: a
+// paragraph cannot be centred reliably across three stacked lines of differing
+// font size, so a one-cell borderless row carries it.
+$submitted = gradesheet_docx_table($section, $plainTable);
+$submitted->addRow();
+$cell = $submitted->addCell(USABLE_WIDTH, $center);
+$cell->addText('Submitted by:', ['jc' => 'center'] + $labelStyle);
+$cell->addText($meta['facilitator_name'], ['jc' => 'center'] + $nameStyle);
+$cell->addText('Course Facilitator', ['jc' => 'center'] + $roleStyle);
 
-    $signatures = gradesheet_docx_table($section, $plainTable);
-    $signatures->addRow();
-    foreach ($columns as $c => $column) {
-        $cell = $signatures->addCell($sigWidths[$c]);
-        $cell->addText($column[0], $labelStyle);
-        foreach ($column[1] as $j => $pair) {
-            $style = $lineStyle;
-            if ($j > 0) {
-                $style['before'] = 160;   // gap above the second signature
-            }
-            $cell->addText($meta[$pair[0]], $style);
-            $cell->addText($pair[1], $roleStyle);
-        }
+$section->addText('');
+
+// Main band: scale on the left, signatures right. Three cells, not four: the
+// widths must sum to USABLE_WIDTH with the same 22 / 26 / 52 split the HTML
+// footer uses, or the printed sheet and the browser preview stop matching.
+$main = gradesheet_docx_table($section, $plainTable);
+$main->addRow();
+
+$cell = $main->addCell($scaleWidths[0]);
+    $cell->addText('Grading System', ['bold' => true, 'size' => 9]);
+    foreach ($data['grading_scale'] as $line) {
+        $cell->addText($line, ['size' => 8]);
     }
 
-    $section->addText('');
-    $scale = gradesheet_docx_table($section, $plainTable);
-    gradesheet_docx_row($scale, $scaleWidths, ['Grading System', ''], ['bold' => true, 'size' => 8]);
-    foreach (array_chunk($data['grading_scale'], 2) as $pair) {
-        gradesheet_docx_row($scale, $scaleWidths, $pair, ['size' => 8]);
-    }
+    // Noted/Received in the middle column.
+    $cell = $main->addCell($notedWidths[0], $center);
+    $cell->addText('Noted:', array_merge($labelStyle, $center));
+    $cell->addText($meta['program_chair'], array_merge($nameStyle, $center));
+    $cell->addText('Program Chair', array_merge($roleStyle, $center));
+    $cell->addText('', ['size' => 9, 'before' => 200]);
+    $cell->addText('Received:', array_merge($labelStyle, $center));
+    $cell->addText($meta['registrar'], array_merge($nameStyle, $center));
+    $cell->addText('Registrar', array_merge($roleStyle, $center));
+
+    // Dean and the date received fill the remaining width.
+    $cell = $main->addCell($deanWidths[0], $center);
+    $cell->addText($meta['dean'], array_merge($nameStyle, $center));
+    $cell->addText('Dean', array_merge($roleStyle, $center));
+    $cell->addText('', ['size' => 9, 'before' => 200]);
+    $cell->addText('Date:', array_merge($labelStyle, $center));
+    $cell->addText($meta['date_received'], array_merge($nameStyle, $center));
 
     $section->addText('');
     $section->addText($meta['note'], ['size' => 8, 'italics' => true]);

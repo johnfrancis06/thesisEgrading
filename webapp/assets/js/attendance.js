@@ -4,6 +4,8 @@ let attendanceData = [];
 let students = [];
 let sessions = [];
 let attendanceConfig = { attendance_late_counts_present: false };
+// Last data the Absent Checker rendered, so Print does not refetch it.
+let absentReportCache = null;
 let attendanceWeekdays = [1, 2, 3, 4, 5];
 let activeMenuCell = null;
 let currentMonth = null;
@@ -1413,6 +1415,9 @@ async function showAbsentChecker() {
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-outline-dark" id="absentPrintBtn" onclick="printAbsentReport()">
+                            <i class="bi bi-printer me-1"></i> Print
+                        </button>
                     </div>
                 </div>
             </div>
@@ -1446,11 +1451,13 @@ async function loadAbsentReport() {
             data = JSON.parse(text);
         } catch (e) {
             console.error('JSON parse error:', e, 'Response:', text);
+            absentReportCache = null;
             document.getElementById('absentTableBody').innerHTML = '<tr><td colspan="10" class="text-center py-3 text-danger">Error loading report</td></tr>';
             return;
         }
         
         if (!data.success) {
+            absentReportCache = null;
             document.getElementById('absentTableBody').innerHTML = '<tr><td colspan="10" class="text-center py-3 text-danger">Failed to load report</td></tr>';
             return;
         }
@@ -1458,6 +1465,7 @@ async function loadAbsentReport() {
         renderAbsentReport(data.data.report, data.data.summary);
     } catch (e) {
         console.error('Error loading absent report:', e);
+        absentReportCache = null;
         document.getElementById('absentTableBody').innerHTML = `<tr><td colspan="10" class="text-center py-3 text-danger">Error: ${e.message}</td></tr>`;
     }
 }
@@ -1465,6 +1473,10 @@ async function loadAbsentReport() {
 function renderAbsentReport(report, summary) {
     const tbody = document.getElementById('absentTableBody');
     const summaryDiv = document.getElementById('absentSummary');
+
+    // The Print button reopens this data, so hold the last render rather than
+    // re-fetching: the filters are already reflected in it.
+    absentReportCache = { report: report || [], summary: summary || {} };
     
     // Summary cards
     summaryDiv.innerHTML = `
@@ -1503,6 +1515,8 @@ function renderAbsentReport(report, summary) {
     `;
     
     if (!report || report.length === 0) {
+        // Cached as an empty set rather than null, so Print still produces a
+        // sheet that states there is nothing to report.
         tbody.innerHTML = '<tr><td colspan="10" class="text-center py-3 text-muted">No students found</td></tr>';
         return;
     }
@@ -1539,6 +1553,128 @@ function renderAbsentReport(report, summary) {
     });
     
     tbody.innerHTML = html;
+}
+
+/**
+ * Prints the Absent Checker report.
+ *
+ * A self-contained document in a new window rather than printing the page: the
+ * report lives in a Bootstrap modal, and printing the host page would carry the
+ * sidebar, topbar and on-screen buttons onto the paper. The Drop buttons are
+ * deliberately left out - a printed sheet is a record, not a control panel.
+ */
+function printAbsentReport() {
+    const cache = absentReportCache;
+    if (!cache) {
+        showToast('Load the report first', 'warning');
+        return;
+    }
+
+    const periodText = cache.summary.period || '';
+    const printedOn = new Date().toLocaleString();
+
+    // Only the students the rules actually flag, plus anyone within one absence
+    // of the threshold, so the sheet stays short enough to sign.
+    const flagged = cache.report.filter(s => (s.max_consecutive_absent || 0) >= 1);
+
+    const rows = (flagged.length ? flagged : cache.report).map(s => {
+        const max = s.max_consecutive_absent || 0;
+        const status = max >= 3
+            ? 'DROP RECOMMENDED'
+            : (max === 2 ? 'At Risk' : 'OK');
+        const shade = max >= 3 ? 'row-drop' : (max === 2 ? 'row-risk' : '');
+        const dates = (s.absent_dates || []).join(', ');
+        return `<tr class="${shade}">
+            <td class="num">${escapeHtml(s.student_no || '')}</td>
+            <td>${escapeHtml(s.name || '')}</td>
+            <td class="num">${s.total_sessions ?? 0}</td>
+            <td class="num">${s.present ?? 0}</td>
+            <td class="num strong">${s.absent ?? 0}</td>
+            <td class="num">${s.late ?? 0}</td>
+            <td class="num">${s.excused ?? 0}</td>
+            <td class="num strong">${max}</td>
+            <td class="num">${escapeHtml(status)}</td>
+            <td class="dates">${escapeHtml(dates || '')}</td>
+        </tr>`;
+    }).join('');
+
+    const doc = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Absent Checker ${escapeHtml(periodText)}</title>
+<style>
+    @page { size: landscape; margin: 10mm; }
+    body { font-family: 'Times New Roman', Times, serif; color: #000; margin: 0; }
+    h1 { font-size: 15pt; text-align: center; margin: 0 0 2mm; text-transform: uppercase; }
+    .sub { font-size: 10pt; text-align: center; margin: 0 0 4mm; }
+    .meta { width: 100%; border-collapse: collapse; margin-bottom: 3mm; font-size: 10pt; }
+    .meta td { border: 1px solid #000; padding: 1mm 1.5mm; }
+    .meta .k { width: 18%; background: #f0f0f0; font-weight: bold; }
+    table.grid { width: 100%; border-collapse: collapse; font-size: 9pt; }
+    table.grid th, table.grid td { border: 1px solid #000; padding: 0.8mm 1mm; }
+    table.grid thead th { background: #d9d9d9; text-align: center; font-weight: bold; }
+    .num { text-align: center; }
+    .strong { font-weight: bold; }
+    .dates { font-size: 8pt; }
+    tr.row-risk td { background: #fff8e1; }
+    tr.row-drop td { background: #fdecea; }
+    .sign { width: 100%; border-collapse: collapse; margin-top: 8mm; font-size: 10pt; }
+    .sign td { border: none; padding: 0 1mm; vertical-align: bottom; }
+    .sign .line { border-top: 1px solid #000; width: 60mm; text-align: center; padding-top: 1mm; font-size: 9pt; }
+    .foot { margin-top: 4mm; font-size: 8pt; font-style: italic; }
+    .empty { text-align: center; font-style: italic; padding: 3mm; }
+</style></head><body>
+<h1>Absent Checker Report</h1>
+<p class="sub">${escapeHtml(periodText)}</p>
+<table class="meta">
+    <tr>
+        <td class="k">Class</td>
+        <td>${escapeHtml(window.attendanceClassLabel || '')}</td>
+        <td class="k">Teacher</td>
+        <td>${escapeHtml(window.attendanceTeacherName || '')}</td>
+    </tr>
+    <tr>
+        <td class="k">Students</td>
+        <td>${cache.summary.total_students ?? 0}</td>
+        <td class="k">Sessions in Period</td>
+        <td>${cache.summary.total_sessions ?? 0}</td>
+    </tr>
+    <tr>
+        <td class="k">At Risk (3+ consecutive)</td>
+        <td>${cache.summary.at_risk ?? 0}</td>
+        <td class="k">Printed</td>
+        <td>${escapeHtml(printedOn)}</td>
+    </tr>
+</table>
+<table class="grid">
+    <thead><tr>
+        <th>Student No.</th><th>Name</th><th>Sessions</th><th>Present</th>
+        <th>Absent</th><th>Late</th><th>Excused</th>
+        <th>Max Consec. Absent</th><th>Status</th><th>Dates Absent</th>
+    </tr></thead>
+    <tbody>${rows || '<tr><td colspan="10" class="empty">No students to report</td></tr>'}</tbody>
+</table>
+<table class="sign">
+    <tr>
+        <td><div class="line">Class Facilitator</div></td>
+        <td style="width: 12mm;"></td>
+        <td><div class="line">Program Chair</div></td>
+    </tr>
+</table>
+<p class="foot">A student is marked DROP RECOMMENDED after three or more consecutive
+absences. Absent dates list every session recorded as absent in the period above.</p>
+</body></html>`;
+
+    const win = window.open('', '_blank');
+    if (!win) {
+        showToast('Allow pop-ups to print this report', 'warning');
+        return;
+    }
+    win.document.open();
+    win.document.write(doc);
+    win.document.close();
+    win.focus();
+    // Give the stylesheet a moment to apply, otherwise some browsers print
+    // before the layout is laid out and the table comes out unstyled.
+    setTimeout(() => { win.print(); }, 250);
 }
 
 async function dropStudent(studentId, studentName) {
