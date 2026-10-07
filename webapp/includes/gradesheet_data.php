@@ -59,6 +59,7 @@ function gradesheet_defaults($class, $facultyName = '') {
         'dean'              => '',
         'registrar'         => '',
         'date_received'     => '',
+        'dean_date'         => '',
         'note'              => 'Note: To be submitted in two (2) copies together with the class list.',
     ];
 }

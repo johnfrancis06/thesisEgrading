@@ -187,12 +187,13 @@ function gradesheet_twips($percent) {
 
 $headerWidths = array_map('gradesheet_twips', [20, 45, 35]);
 $infoWidths   = array_map('gradesheet_twips', [50, 50]);
-// Three cells matching the HTML footer's 22 / 26 / 52 split. The four 22 /
-    // 23 / 33 / 22 arrays no longer apply: Submitted by moved out of the band
-    // and sits between the certification and these cells.
-$scaleWidths = array_map('gradesheet_twips', [22]);
-$notedWidths = array_map('gradesheet_twips', [26]);
-$deanWidths  = array_map('gradesheet_twips', [52]);
+// Four cells matching the HTML footer's 24 / 33 / 22 / 21 colgroup.
+// The footer is one five-row table: the grading scale holds the first
+// column across all rows (vMerge) and the signature blocks flow in the
+// other three, with gridSpan pairs wherever the HTML uses colspan="2".
+$footerWidths = array_map('gradesheet_twips', [24, 33, 22, 21]);
+// Row heights in twips, matching .gs-r1..gs-r4 in gradesheet_template.php.
+$footerRowHeights = [794, 624, 567, 737];
 // Must sum to 100% and match gradesheet_template.php so the Word table lines up
 // with the browser and PDF versions.
 $colWidths    = array_map('gradesheet_twips', [5, 39, 14, 14, 14, 14]);
@@ -312,63 +313,93 @@ foreach ($chunks as $pageIndex => $pageRows) {
 
     // ---- Certification, signatures and grading scale ---------------------
     // Every sheet carries the footer, matching the browser and PDF output:
-    // certification top-left, grading scale on the left, signatures right.
+    // certification top-left, then one five-row table with the grading
+    // scale down the left and the signature blocks to its right.
     $section->addText('');
-    $section->addText($meta['certification'], ['size' => 9]);
+    $section->addText($meta['certification'], ['size' => 10]);
     $section->addText('');
 
-    // Names are plain bold text - no underline rule, no border.
-    $nameStyle = ['size' => 10.5, 'bold' => true];
-    $roleStyle = ['size' => 8.5];
-    $labelStyle = ['size' => 9];
-    // Signature blocks are centred, matching the HTML footer's centred columns.
-    $center = ['jc' => 'center'];
+    // Signature names are bold and underlined (.gs-ul in the HTML
+    // footer); roles sit under each block at 10pt.
+    $nameStyle       = ['size' => 10, 'bold' => true, 'underline' => 'single'];
+    $roleStyle       = ['size' => 10];
+    $labelStyle      = ['size' => 10];
+    $notedLabelStyle = ['size' => 8.5];
+    // Signature blocks are left-aligned, matching the HTML
+    // footer's .gs-center rule, with the same 50px indent
+    // (50px = 750 twips at 96dpi).
+    $left     = ['jc' => 'left'];
+    $leftCell = ['jc' => 'left', 'marginLeft' => 750];
+    $right  = ['jc' => 'right'];
+    // 9mm of right padding for the right-aligned labels, matching the
+    // .gs-submitted-label / .gs-received-label padding.
+    $labelCell = ['marginRight' => 510];
 
-// Submitted by sits between the certification text and the band, matching
-// gradesheet_template.php. Word needs a real table for a centred block: a
-// paragraph cannot be centred reliably across three stacked lines of differing
-// font size, so a one-cell borderless row carries it.
-$submitted = gradesheet_docx_table($section, $plainTable);
-$submitted->addRow();
-$cell = $submitted->addCell(USABLE_WIDTH, $center);
-$cell->addText('Submitted by:', ['jc' => 'center'] + $labelStyle);
-$cell->addText($meta['facilitator_name'], ['jc' => 'center'] + $nameStyle);
-$cell->addText('Course Facilitator', ['jc' => 'center'] + $roleStyle);
+    $main = gradesheet_docx_table($section, $plainTable);
 
-$section->addText('');
-
-// Main band: scale on the left, signatures right. Three cells, not four: the
-// widths must sum to USABLE_WIDTH with the same 22 / 26 / 52 split the HTML
-// footer uses, or the printed sheet and the browser preview stop matching.
-$main = gradesheet_docx_table($section, $plainTable);
-$main->addRow();
-
-$cell = $main->addCell($scaleWidths[0]);
-    $cell->addText('Grading System', ['bold' => true, 'size' => 9]);
+    // Row 1: grading scale (spans all five rows) | Submitted by | facilitator.
+    $main->addRow($footerRowHeights[0]);
+    $cell = $main->addCell($footerWidths[0], ['vMerge' => 'restart']);
+    // Two blank lines push the scale down, matching the 9mm padding-top
+    // of .gs-cell-scale.
+    $cell->addText('', ['size' => 10]);
+    $cell->addText('', ['size' => 10]);
+    $cell->addText('Grading System:', ['bold' => true, 'size' => 10]);
     foreach ($data['grading_scale'] as $line) {
-        $cell->addText($line, ['size' => 8]);
+        // Show "1.0 - 99-100" like the printed form (the data may use "=").
+        $line = preg_replace('/\s*=\s*/', ' - ', (string) $line, 1);
+        $cell->addText($line, ['size' => 9.5]);
     }
+    $cell = $main->addCell($footerWidths[1], $labelCell);
+    $cell->addText('Submitted by:', $labelStyle + $right);
+    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $leftCell + ['gridSpan' => 2]);
+    $cell->addText($meta['facilitator_name'], $nameStyle);
+    $cell->addText('Course Facilitator', $roleStyle + $left);
 
-    // Noted/Received in the middle column.
-    $cell = $main->addCell($notedWidths[0], $center);
-    $cell->addText('Noted:', array_merge($labelStyle, $center));
-    $cell->addText($meta['program_chair'], array_merge($nameStyle, $center));
-    $cell->addText('Program Chair', array_merge($roleStyle, $center));
-    $cell->addText('', ['size' => 9, 'before' => 200]);
-    $cell->addText('Received:', array_merge($labelStyle, $center));
-    $cell->addText($meta['registrar'], array_merge($nameStyle, $center));
-    $cell->addText('Registrar', array_merge($roleStyle, $center));
+    // Row 2: Noted (program chair) | Dean.
+    $main->addRow($footerRowHeights[1]);
+    $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
+    $cell = $main->addCell($footerWidths[1] + $footerWidths[2], ['gridSpan' => 2]);
+    $run = $cell->addTextRun();
+    $run->addText('Noted: ', $notedLabelStyle);
+    $run->addText($meta['program_chair'], $nameStyle);
+    $cell->addText('Program Chair', $roleStyle + $left);
+    $cell = $main->addCell($footerWidths[3], $leftCell);
+    $cell->addText($meta['dean'], $nameStyle);
+    $cell->addText('Dean', $roleStyle + $left);
 
-    // Dean and the date received fill the remaining width.
-    $cell = $main->addCell($deanWidths[0], $center);
-    $cell->addText($meta['dean'], array_merge($nameStyle, $center));
-    $cell->addText('Dean', array_merge($roleStyle, $center));
-    $cell->addText('', ['size' => 9, 'before' => 200]);
-    $cell->addText('Date:', array_merge($labelStyle, $center));
-    $cell->addText($meta['date_received'], array_merge($nameStyle, $center));
+    // Row 3: the Dean's date. Four plain cells so the table grid keeps
+    // all four columns (the writer builds w:tblGrid from the widest row).
+    $main->addRow($footerRowHeights[2]);
+    $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
+    $main->addCell($footerWidths[1]);
+    $cell = $main->addCell($footerWidths[2]);
+    $run = $cell->addTextRun();
+    $run->addText('Date: ', $labelStyle);
+    $run->addText((string) $meta['dean_date'], $nameStyle);
+    $main->addCell($footerWidths[3]);
+
+    // Row 4: Received | registrar.
+    $main->addRow($footerRowHeights[3]);
+    $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
+    $cell = $main->addCell($footerWidths[1], $labelCell);
+    $cell->addText('Received:', $labelStyle + $right);
+    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $leftCell + ['gridSpan' => 2]);
+    $cell->addText($meta['registrar'], $nameStyle);
+    $cell->addText('Registrar', $roleStyle + $left);
+
+    // Row 5: the registrar's date, same four-cell layout as row 3.
+    $main->addRow();
+    $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
+    $main->addCell($footerWidths[1]);
+    $cell = $main->addCell($footerWidths[2]);
+    $run = $cell->addTextRun();
+    $run->addText('Date: ', $labelStyle);
+    $run->addText((string) $meta['date_received'], $nameStyle);
+    $main->addCell($footerWidths[3]);
 
     $section->addText('');
-    $section->addText($meta['note'], ['size' => 8, 'italics' => true]);
+    $section->addText($meta['note'], ['size' => 9]);
 
     if (!$isLast) {
         $section->addPageBreak();
