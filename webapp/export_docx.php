@@ -331,6 +331,10 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $left     = ['jc' => 'left'];
     $center   = ['jc' => 'center'];
     $sigCell  = ['jc' => 'center', 'marginLeft' => 750];
+    // The facilitator block drops one line inside row 1: bottom-aligned
+    // in the row so the name sits below the "Submitted by:" label,
+    // which stays top-aligned.
+    $facCell  = ['jc' => 'center', 'marginLeft' => 750, 'vAlign' => CellStyle::VALIGN_BOTTOM];
     $right  = ['jc' => 'right'];
     // 9mm of right padding for the right-aligned labels, matching the
     // .gs-submitted-label / .gs-received-label padding.
@@ -353,7 +357,7 @@ foreach ($chunks as $pageIndex => $pageRows) {
     }
     $cell = $main->addCell($footerWidths[1], $labelCell);
     $cell->addText('Submitted by:', $labelStyle + $right);
-    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $sigCell + ['gridSpan' => 2]);
+    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $facCell + ['gridSpan' => 2]);
     $cell->addText($meta['facilitator_name'], $nameStyle);
     $cell->addText('Course Facilitator', $roleStyle + $center);
 
@@ -369,22 +373,23 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $cell->addText($meta['dean'], $nameStyle);
     $cell->addText('Dean', $roleStyle + $center);
 
-    // Row 3: the Dean's date. Four plain cells so the table grid keeps
+    // Row 3: the "Received:" label (raised one row above the registrar
+    // name) + the Dean's date. Four plain cells so the table grid keeps
     // all four columns (the writer builds w:tblGrid from the widest row).
     $main->addRow($footerRowHeights[2]);
     $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
-    $main->addCell($footerWidths[1]);
+    $cell = $main->addCell($footerWidths[1], $labelCell);
+    $cell->addText('Received:', $labelStyle + $right);
     $cell = $main->addCell($footerWidths[2]);
     $run = $cell->addTextRun(['jc' => 'center']);
     $run->addText('Date: ', $labelStyle);
     $run->addText((string) $meta['dean_date'], $nameStyle);
     $main->addCell($footerWidths[3]);
 
-    // Row 4: Received | registrar.
+    // Row 4: Registrar. The "Received:" label sits in the row above.
     $main->addRow($footerRowHeights[3]);
     $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
-    $cell = $main->addCell($footerWidths[1], $labelCell);
-    $cell->addText('Received:', $labelStyle + $right);
+    $main->addCell($footerWidths[1]);
     $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $sigCell + ['gridSpan' => 2]);
     $cell->addText($meta['registrar'], $nameStyle);
     $cell->addText('Registrar', $roleStyle + $center);

@@ -191,14 +191,15 @@ if (!function_exists('gradesheet_render')) {
         $html .= '<div class="gs-sig-role">Dean</div>';
         $html .= '</td></tr>';
 
-        // Row 3: Dean's date
-        $html .= '<tr class="gs-r3"><td></td>';
+        // Row 3: Received label + Dean's date. The label sits a full
+        // row above the registrar name, matching the reference form.
+        $html .= '<tr class="gs-r3"><td class="gs-received-label">Received:</td>';
         $html .= '<td colspan="2" class="gs-date-cell">Date: <span class="gs-line gs-line-date" data-field="dean_date">'
                . $e($meta['dean_date'] ?? '') . '</span></td></tr>';
 
-        // Row 4: Received + registrar
-        $html .= '<tr class="gs-r4">';
-        $html .= '<td class="gs-received-label">Received:</td>';
+        // Row 4: Registrar. The "Received:" label moved up to the row
+        // above, so it ends up about two lines over the name.
+        $html .= '<tr class="gs-r4"><td></td>';
         $html .= '<td colspan="2" class="gs-center">';
         $html .= '<b class="gs-ul" data-field="registrar">' . $e($meta['registrar']) . '</b>';
         $html .= '<div class="gs-sig-role">Registrar</div>';
@@ -414,8 +415,13 @@ if (!function_exists('gradesheet_render')) {
         .gs-scale-row { white-space: nowrap; font-size: 9.5pt; line-height: 1.3; }
 
         .gs-center { text-align: left; margin-left: 50px; }
-        .gs-submitted-label { text-align: right; padding-right: 9mm !important; }
-        .gs-received-label { text-align: right; padding-right: 9mm !important; padding-top: 3mm !important; }
+        .gs-submitted-label { text-align: right; padding-right: 9mm !important; vertical-align: top; }
+        /* The facilitator block drops one line inside row 1: bottom-align
+           the cell so the name+role anchor to the bottom edge of
+           the row, below the top-aligned "Submitted by:" label,
+           without growing the row or pushing the Noted row down. */
+        .gs-r1 td.gs-center { vertical-align: bottom; }
+        .gs-received-label { text-align: right; padding-right: 9mm !important; }
         .gs-noted-label { font-size: 8.5pt; }
         .gs-ul { font-weight: bold; text-decoration: underline; }
         .gs-sig-role { font-size: 10pt; margin-top: 0.5mm; }
