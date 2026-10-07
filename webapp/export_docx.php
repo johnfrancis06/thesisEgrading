@@ -325,11 +325,12 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $roleStyle       = ['size' => 10];
     $labelStyle      = ['size' => 10];
     $notedLabelStyle = ['size' => 8.5];
-    // Signature blocks are left-aligned, matching the HTML
-    // footer's .gs-center rule, with the same 50px indent
-    // (50px = 750 twips at 96dpi).
+    // Signature blocks are centred, matching the HTML footer's
+    // .gs-footer-main td.gs-center rule, keeping the same 50px
+    // indent (50px = 750 twips at 96dpi).
     $left     = ['jc' => 'left'];
-    $leftCell = ['jc' => 'left', 'marginLeft' => 750];
+    $center   = ['jc' => 'center'];
+    $sigCell  = ['jc' => 'center', 'marginLeft' => 750];
     $right  = ['jc' => 'right'];
     // 9mm of right padding for the right-aligned labels, matching the
     // .gs-submitted-label / .gs-received-label padding.
@@ -352,9 +353,9 @@ foreach ($chunks as $pageIndex => $pageRows) {
     }
     $cell = $main->addCell($footerWidths[1], $labelCell);
     $cell->addText('Submitted by:', $labelStyle + $right);
-    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $leftCell + ['gridSpan' => 2]);
+    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $sigCell + ['gridSpan' => 2]);
     $cell->addText($meta['facilitator_name'], $nameStyle);
-    $cell->addText('Course Facilitator', $roleStyle + $left);
+    $cell->addText('Course Facilitator', $roleStyle + $center);
 
     // Row 2: Noted (program chair) | Dean.
     $main->addRow($footerRowHeights[1]);
@@ -364,9 +365,9 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $run->addText('Noted: ', $notedLabelStyle);
     $run->addText($meta['program_chair'], $nameStyle);
     $cell->addText('Program Chair', $roleStyle + $left);
-    $cell = $main->addCell($footerWidths[3], $leftCell);
+    $cell = $main->addCell($footerWidths[3], $sigCell);
     $cell->addText($meta['dean'], $nameStyle);
-    $cell->addText('Dean', $roleStyle + $left);
+    $cell->addText('Dean', $roleStyle + $center);
 
     // Row 3: the Dean's date. Four plain cells so the table grid keeps
     // all four columns (the writer builds w:tblGrid from the widest row).
@@ -374,7 +375,7 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
     $main->addCell($footerWidths[1]);
     $cell = $main->addCell($footerWidths[2]);
-    $run = $cell->addTextRun();
+    $run = $cell->addTextRun(['jc' => 'center']);
     $run->addText('Date: ', $labelStyle);
     $run->addText((string) $meta['dean_date'], $nameStyle);
     $main->addCell($footerWidths[3]);
@@ -384,16 +385,16 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
     $cell = $main->addCell($footerWidths[1], $labelCell);
     $cell->addText('Received:', $labelStyle + $right);
-    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $leftCell + ['gridSpan' => 2]);
+    $cell = $main->addCell($footerWidths[2] + $footerWidths[3], $sigCell + ['gridSpan' => 2]);
     $cell->addText($meta['registrar'], $nameStyle);
-    $cell->addText('Registrar', $roleStyle + $left);
+    $cell->addText('Registrar', $roleStyle + $center);
 
     // Row 5: the registrar's date, same four-cell layout as row 3.
     $main->addRow();
     $main->addCell($footerWidths[0], ['vMerge' => 'continue']);
     $main->addCell($footerWidths[1]);
     $cell = $main->addCell($footerWidths[2]);
-    $run = $cell->addTextRun();
+    $run = $cell->addTextRun(['jc' => 'center']);
     $run->addText('Date: ', $labelStyle);
     $run->addText((string) $meta['date_received'], $nameStyle);
     $main->addCell($footerWidths[3]);
