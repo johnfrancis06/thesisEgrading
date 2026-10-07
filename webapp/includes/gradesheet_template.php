@@ -7,7 +7,7 @@
  * (tables and text) rather than images, so nothing can break in Word or PDF and
  * every value can be edited in place.
  *
- * @param array $data Output of gradesheet_load().
+ * @param array $jdata Output of gradesheet_load().
  * @return string HTML for one or more .sheet blocks.
  */
 
@@ -157,59 +157,59 @@ if (!function_exists('gradesheet_render')) {
         $e = 'gradesheet_e';
 
         $html  = '<div class="footer-block gs-footer">';
+
+        // Certification sits alone at the top-left of the footer.
         $html .= '<p class="gs-certify" data-field="certification">' . $e($meta['certification']) . '</p>';
 
-        // One table so Dompdf/mPDF print it exactly like the browser.
-        // Columns: scale | left-middle | right-middle | right
-        $html .= '<table class="gs-footer-main">';
-        $html .= '<colgroup><col style="width:24%"><col style="width:33%"><col style="width:22%"><col style="width:21%"></colgroup>';
+        // Submitted by sits on its own line between the certification and the
+        // band, centred on the page. It was the third cell of the four-cell band,
+        // which left it visually attached to the grading scale rather than to the
+        // declaration above it - the faculty member signs their own submission,
+        // not the scale.
+        $html .= '<div class="gs-submitted-row">';
+        $html .= '<div class="gs-sig-label">Submitted by:</div>';
+        $html .= '<div class="gs-sig-name" data-field="facilitator_name">' . $e($meta['facilitator_name']) . '</div>';
+        $html .= '<div class="gs-sig-role">Course Facilitator</div>';
+        $html .= '</div>';
 
-        // Row 1: Submitted by + facilitator
-        $html .= '<tr class="gs-r1">';
-        $html .= '<td class="gs-cell-scale" rowspan="5">';
-        $html .= '<div class="gs-scale-title">Grading System:</div>';
+// Main band: grading scale on the left, signatures to its right.
+        // A table rather than display:grid because Dompdf and mPDF do not
+        // implement grid, so a grid footer would print differently from the
+        // browser preview.
+        //
+        // Three cells, not four. Noted/Received keep their own column so they
+        // sit further left than the Dean block without dragging it along.
+        $html .= '<table class="gs-footer-main"><tr>';
+
+        $html .= '<td class="gs-cell gs-cell-scale">';
+        $html .= '<div class="gs-scale-title">Grading System</div>';
+        $html .= '<div class="gs-scale-list">';
         foreach ($scale as $line) {
-            // Show "1.0 - 99-100" like the printed form (the data may use "=").
-            $line = preg_replace('/\s*=\s*/', ' - ', (string)$line, 1);
             $html .= '<div class="gs-scale-row">' . $e($line) . '</div>';
         }
-        $html .= '</td>';
-        $html .= '<td class="gs-submitted-label">Submitted by:</td>';
-        $html .= '<td colspan="2" class="gs-center">';
-        $html .= '<b class="gs-ul" data-field="facilitator_name">' . $e($meta['facilitator_name']) . '</b>';
-        $html .= '<div class="gs-sig-role">Course Facilitator</div>';
-        $html .= '</td></tr>';
+        $html .= '</div></td>';
 
-        // Row 2: Noted + Dean line
-        $html .= '<tr class="gs-r2">';
-        $html .= '<td colspan="2" class="gs-noted">';
-        $html .= '<div><span class="gs-noted-label">Noted:</span> <b class="gs-ul" data-field="program_chair">' . $e($meta['program_chair']) . '</b></div>';
-        $html .= '<div class="gs-sig-role gs-center">Program Chair</div>';
-        $html .= '</td>';
-        $html .= '<td class="gs-center">';
-        $html .= '<div class="gs-line gs-line-dean" data-field="dean">' . $e($meta['dean']) . '</div>';
-        $html .= '<div class="gs-sig-role">Dean</div>';
-        $html .= '</td></tr>';
-
-        // Row 3: Dean's date
-        $html .= '<tr class="gs-r3"><td></td>';
-        $html .= '<td colspan="2" class="gs-date-cell">Date: <span class="gs-line gs-line-date" data-field="dean_date">'
-               . $e($meta['dean_date'] ?? '') . '</span></td></tr>';
-
-        // Row 4: Received + registrar
-        $html .= '<tr class="gs-r4">';
-        $html .= '<td class="gs-received-label">Received:</td>';
-        $html .= '<td colspan="2" class="gs-center">';
-        $html .= '<b class="gs-ul" data-field="registrar">' . $e($meta['registrar']) . '</b>';
+        // Centre-left: Noted (program chair) above Received (registrar).
+        $html .= '<td class="gs-cell gs-cell-noted">';
+        $html .= '<div class="gs-sig-label">Noted:</div>';
+        $html .= '<div class="gs-sig-name" data-field="program_chair">' . $e($meta['program_chair']) . '</div>';
+        $html .= '<div class="gs-sig-role">Program Chair</div>';
+        $html .= '<div class="gs-sig-gap"></div>';
+        $html .= '<div class="gs-sig-label">Received:</div>';
+        $html .= '<div class="gs-sig-name" data-field="registrar">' . $e($meta['registrar']) . '</div>';
         $html .= '<div class="gs-sig-role">Registrar</div>';
-        $html .= '</td></tr>';
+        $html .= '</td>';
 
-        // Row 5: Registrar's date
-        $html .= '<tr class="gs-r5"><td></td>';
-        $html .= '<td colspan="2" class="gs-date-cell">Date: <span class="gs-line gs-line-date" data-field="date_received">'
-               . $e($meta['date_received']) . '</span></td></tr>';
+        // Right: Dean and the date received.
+        $html .= '<td class="gs-cell gs-cell-right">';
+        $html .= '<div class="gs-sig-name" data-field="dean">' . $e($meta['dean']) . '</div>';
+        $html .= '<div class="gs-sig-role">Dean</div>';
+        $html .= '<div class="gs-sig-gap"></div>';
+        $html .= '<div class="gs-sig-label">Date:</div>';
+        $html .= '<div class="gs-sig-name" data-field="date_received">' . $e($meta['date_received']) . '</div>';
+        $html .= '</td>';
 
-        $html .= '</table>';
+        $html .= '</tr></table>';
 
         $html .= '<p class="gs-note" data-field="note">' . $e($meta['note']) . '</p>';
         $html .= '</div>';
@@ -391,42 +391,50 @@ if (!function_exists('gradesheet_render')) {
 
         .footer-block { page-break-inside: avoid; break-inside: avoid; }
 
-        /* Footer. Sized in pt to match the rest of the sheet. */
+        /* Footer. Sized in pt to match the rest of the sheet (the px figures in
+           the design brief are the same values at 96dpi: 12px = 9pt). */
         .gs-footer {
             margin-top: 5mm;
             width: 100%;
             font-family: "Times New Roman", Times, serif;
-            font-size: 10pt;
+            font-size: 9pt;
             line-height: 1.25;
         }
-        .gs-certify { margin: 0 0 4mm; font-size: 10pt; }
+        .gs-certify { margin: 0 0 4mm; font-size: 9pt; }
 
-        .gs-footer-main { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        .gs-footer-main td { border: 0; padding: 0; vertical-align: top; font-size: 10pt; }
+        .gs-footer-main { width: 100%; border-collapse: collapse; }
+        .gs-footer-main td { border: 0; padding: 0; vertical-align: top; }
+        /* 22 / 26 / 52. The band is three cells since Submitted by moved above
+           it. Sizes are measured, not guessed: at 10.5pt bold the facilitator
+           name needed 53.4mm, which is why that block had 33% to itself; the
+           remaining 67% splits here so Noted/Received keep their own column and
+           the Dean block still has room for a long name. */
+        .gs-cell-scale     { width: 22%; padding-right: 4mm; text-align: left; }
+        .gs-cell-noted     { width: 26%; padding-right: 4mm; text-align: center; }
+        .gs-cell-right     { width: 52%; text-align: center; }
 
-        .gs-r1 td { height: 14mm; }
-        .gs-r2 td { height: 11mm; }
-        .gs-r3 td { height: 10mm; }
-        .gs-r4 td { height: 13mm; }
+        /* Own line between the certification and the band, centred on the page.
+           A block rather than a table cell: Dompdf and mPDF do not implement
+           grid, and a table cell here would force the band to start below an
+           empty first column. */
+        .gs-submitted-row {
+            text-align: center; margin: 0 0 4mm; padding: 0;
+        }
 
-        .gs-cell-scale { padding-top: 9mm !important; text-align: left; }
-        .gs-scale-title { font-weight: bold; margin-bottom: 0.5mm; }
-        .gs-scale-row { white-space: nowrap; font-size: 9.5pt; line-height: 1.3; }
+        .gs-sig-label { font-size: 9pt; margin-bottom: 0.5mm; }
+        /* Names are plain bold text - no underline, no rule, no border. */
+        .gs-sig-name {
+            font-size: 10.5pt; font-weight: bold; line-height: 1.2;
+            min-height: 5mm; padding: 0 0 0.5mm 0;
+        }
+        .gs-sig-gap { height: 7mm; }
+        .gs-sig-role { font-size: 8.5pt; margin-top: 0.5mm; }
 
-        .gs-center { text-align: left; margin-left: 50px; }
-        .gs-submitted-label { text-align: right; padding-right: 9mm !important; }
-        .gs-received-label { text-align: right; padding-right: 9mm !important; padding-top: 3mm !important; }
-        .gs-noted-label { font-size: 8.5pt; }
-        .gs-ul { font-weight: bold; text-decoration: underline; }
-        .gs-sig-role { font-size: 10pt; margin-top: 0.5mm; }
+        .gs-scale-title { font-size: 9pt; font-weight: bold; margin-bottom: 1mm; }
+        .gs-scale-list { font-size: 8pt; line-height: 1.3; }
+        .gs-scale-row { white-space: nowrap; }
 
-        /* Blank fill-in lines (Dean signature, Date) */
-        .gs-line { border-bottom: 1px solid #000; min-height: 4.5mm; text-align: center; font-weight: bold; }
-        .gs-line-dean { width: 28mm; margin: 0 auto; }
-        .gs-line-date { display: inline-block; width: 38mm; vertical-align: bottom; }
-        .gs-date-cell { padding-left: 3mm !important; padding-top: 3mm !important; }
-
-        .gs-note { margin: 3mm 0 0; font-size: 9pt; font-style: normal; }
+        .gs-note { margin: 3mm 0 0; font-size: 8pt; font-style: italic; }
 
         /* Edit-mode affordances: dashed outline only while editing, never on paper. */
         .gs-edit { cursor: text; }
