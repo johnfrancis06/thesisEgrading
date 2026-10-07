@@ -1069,35 +1069,61 @@ try {
         // A regular day carries no label, so clearing the type also clears the name.
         $effectiveLabel = ($type === 'regular') ? '' : $label;
 
-        if ($session) {
-            $update = $db->prepare("UPDATE attendance_session SET session_type = ?, label = ? WHERE id = ?");
-            $update->bind_param("ssi", $type, $effectiveLabel, $session['id']);
-            if (!$update->execute()) {
-                echo ResponseAPI::error("Failed to update day");
-                exit;
+        // The type change and the attendance cleanup land in one
+        // transaction, so a failed delete can never leave a locked column
+        // with marks still in it.
+        $db->begin_transaction();
+        try {
+            if ($session) {
+                $update = $db->prepare("UPDATE attendance_session SET session_type = ?, label = ? WHERE id = ?");
+                $update->bind_param("ssi", $type, $effectiveLabel, $session['id']);
+                if (!$update->execute()) {
+                    throw new RuntimeException("Failed to update day");
+                }
+                $sessionId = $session['id'];
+            } else {
+                $insert = $db->prepare("INSERT INTO attendance_session (class_section_id, date, session_type, label) VALUES (?, ?, ?, ?)");
+                $insert->bind_param("isss", $classId, $date, $type, $effectiveLabel);
+                if (!$insert->execute()) {
+                    throw new RuntimeException("Failed to create day");
+                }
+                $sessionId = $db->insert_id;
             }
-            $sessionId = $session['id'];
-        } else {
-            $insert = $db->prepare("INSERT INTO attendance_session (class_section_id, date, session_type, label) VALUES (?, ?, ?, ?)");
-            $insert->bind_param("isss", $classId, $date, $type, $effectiveLabel);
-            if (!$insert->execute()) {
-                echo ResponseAPI::error("Failed to create day");
-                exit;
-            }
-            $sessionId = $db->insert_id;
 
-            $students = $db->query("SELECT id FROM student WHERE class_section_id = $classId")->fetch_all(MYSQLI_ASSOC);
-            foreach ($students as $s) {
-                $stmt = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
-                $stmt->bind_param("is", $sessionId, $s['id']);
-                $stmt->execute();
+            if ($type === 'regular') {
+                // A brand new regular day starts with one empty row per
+                // student. Changing a locked day back to regular starts
+                // empty too, so no rows are recreated here.
+                if (!$session) {
+                    $students = $db->query("SELECT id FROM student WHERE class_section_id = $classId")->fetch_all(MYSQLI_ASSOC);
+                    foreach ($students as $s) {
+                        $stmt = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status) VALUES (?, ?, '')");
+                        $stmt->bind_param("is", $sessionId, $s['id']);
+                        $stmt->execute();
+                    }
+                }
+            } else {
+                // A holiday or seminar carries no attendance, so anything
+                // already recorded for the date is removed together with
+                // the type change.
+                $delete = $db->prepare("DELETE FROM attendance_record WHERE attendance_session_id = ?");
+                $delete->bind_param("i", $sessionId);
+                if (!$delete->execute()) {
+                    throw new RuntimeException("Failed to clear day attendance");
+                }
             }
+
+            logAudit($db, $faculty_id, 'set_attendance_day_type', 'attendance_session', $sessionId,
+                json_encode(['session_type' => $session['session_type'] ?? 'regular', 'label' => $session['label'] ?? '']),
+                json_encode(['session_type' => $type, 'label' => $effectiveLabel])
+            );
+
+            $db->commit();
+        } catch (RuntimeException $e) {
+            $db->rollback();
+            echo ResponseAPI::error($e->getMessage());
+            exit;
         }
-
-        logAudit($db, $faculty_id, 'set_attendance_day_type', 'attendance_session', $sessionId,
-            json_encode(['session_type' => $session['session_type'] ?? 'regular', 'label' => $session['label'] ?? '']),
-            json_encode(['session_type' => $type, 'label' => $effectiveLabel])
-        );
 
         echo ResponseAPI::success([
             'id' => $sessionId,
@@ -1150,6 +1176,18 @@ try {
 
         $sessionClassId = intval($ownerRow['class_section_id']);
 
+        // A holiday or seminar column is locked and holds no
+        // attendance, so it can never be completed.
+        $dayTypeStmt = $db->prepare("SELECT session_type FROM attendance_session WHERE id = ?");
+        $dayTypeStmt->bind_param("i", $sessionId);
+        $dayTypeStmt->execute();
+        $dayTypeRow = $dayTypeStmt->get_result()->fetch_assoc();
+        $dayType = $dayTypeRow['session_type'] ?? 'regular';
+        if ($dayType === 'holiday' || $dayType === 'seminar') {
+            echo ResponseAPI::error("A " . $dayType . " day cannot be saved", 403);
+            exit;
+        }
+
         // A student added after the day was first created has no record yet, so
         // the day would silently omit them. Create the missing rows as present.
         $insertMissing = $db->prepare("INSERT INTO attendance_record (attendance_session_id, student_id, status)
@@ -1193,6 +1231,27 @@ try {
         $remarks = $data['remarks'] ?? '';
         $sessionId = intval($data['session_id'] ?? 0);
         $studentId = intval($data['student_id'] ?? 0);
+
+        // A holiday or seminar column is locked: it holds no
+        // attendance, so any write to it is rejected outright.
+        $checkSessionId = 0;
+        if ($recordId > 0) {
+            $checkRow = $db->query("SELECT attendance_session_id FROM attendance_record WHERE id = $recordId")->fetch_assoc();
+            $checkSessionId = $checkRow ? intval($checkRow['attendance_session_id']) : 0;
+        } elseif ($sessionId > 0) {
+            $checkSessionId = $sessionId;
+        }
+        if ($checkSessionId > 0) {
+            $dayTypeStmt = $db->prepare("SELECT session_type FROM attendance_session WHERE id = ?");
+            $dayTypeStmt->bind_param("i", $checkSessionId);
+            $dayTypeStmt->execute();
+            $dayTypeRow = $dayTypeStmt->get_result()->fetch_assoc();
+            $dayType = $dayTypeRow['session_type'] ?? 'regular';
+            if ($dayType === 'holiday' || $dayType === 'seminar') {
+                echo ResponseAPI::error("A " . $dayType . " day cannot be edited", 403);
+                exit;
+            }
+        }
 
         // Editing any cell reopens its day, so the teacher is reminded to save it
         // again before the remaining blanks become present.
@@ -1378,13 +1437,19 @@ try {
             $sessions = $db->query("SELECT * FROM attendance_session WHERE class_section_id = $classId AND date BETWEEN '$startDate' AND '$endDate' ORDER BY date")->fetch_all(MYSQLI_ASSOC);
         }
         
-        // Filter sessions by class weekdays
+        // Filter sessions by class weekdays. Holidays and seminars are
+        // locked and carry no attendance, so they never count towards a
+        // student's totals.
         $classSessionDates = [];
         foreach ($sessions as $s) {
             $jsDay = (int)date('N', strtotime($s['date']));
-            if (in_array($jsDay, $weekdays)) {
-                $classSessionDates[] = $s['date'];
+            if (!in_array($jsDay, $weekdays)) {
+                continue;
             }
+            if (($s['session_type'] ?? 'regular') !== 'regular') {
+                continue;
+            }
+            $classSessionDates[] = $s['date'];
         }
         
         if (empty($classSessionDates)) {

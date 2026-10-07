@@ -941,6 +941,52 @@ small { color: var(--gray-500); }
     background: #ddd6fe;
 }
 
+/* --- Locked day merged cell ---
+   A holiday or seminar column is not editable: one cell merged down
+   the whole grid carries the day's name, written vertically, in the
+   column's own tint. It has no pointer affordance at all. */
+.sheet-grid tbody td.day-merged {
+    cursor: default;
+    padding: 8px 2px;
+    vertical-align: middle;
+    text-align: center;
+    background: #ffffff;
+}
+.sheet-grid tbody td.day-merged.col-holiday,
+.sheet-grid tbody td.day-merged.col-holiday:hover,
+.sheet-grid tbody tr:nth-child(odd) td.day-merged.col-holiday,
+.sheet-grid tbody tr:nth-child(even) td.day-merged.col-holiday {
+    background: #ffe4e6 !important;
+}
+.sheet-grid tbody td.day-merged.col-seminar,
+.sheet-grid tbody td.day-merged.col-seminar:hover,
+.sheet-grid tbody tr:nth-child(odd) td.day-merged.col-seminar,
+.sheet-grid tbody tr:nth-child(even) td.day-merged.col-seminar {
+    background: #ede9fe !important;
+}
+.sheet-grid tbody tr td.day-merged:hover {
+    background: #ffffff !important;
+    outline: none;
+}
+.day-merged .merged-label {
+    display: inline-block;
+    writing-mode: vertical-rl;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    line-height: 1.25;
+    max-height: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.col-holiday .merged-label {
+    color: #9f1239;
+}
+.col-seminar .merged-label {
+    color: #5b21b6;
+}
+
 /* The holiday or seminar name, shown inside the narrow date column. */
 .day-header-label {
     background: transparent;

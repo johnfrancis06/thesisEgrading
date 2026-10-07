@@ -112,51 +112,6 @@ function renderMonthlySheet(classDates, sessionsByDate, students, recordsMap) {
     const tfoot = document.getElementById('attendanceGridFoot');
 
     // Build header rows - only class dates
-    // Holiday and seminar names are too long for a 42px column, so they get their
-    // own banner row that spans every highlighted column and reads horizontally.
-    const bannerGroups = [];
-    let currentGroup = null;
-    classDates.forEach((d, index) => {
-        const session = sessionsByDate[d.dateStr];
-        const type = session && session.session_type && session.session_type !== 'regular'
-            ? session.session_type : '';
-        if (!type) {
-            currentGroup = null;
-            return;
-        }
-        // A new banner starts whenever the highlighted run stops, or the kind
-        // changes, so holidays and seminars never share one colour.
-        if (!currentGroup || currentGroup.type !== type) {
-            currentGroup = { from: index, to: index, type, names: [], firstDate: d.dateStr };
-            bannerGroups.push(currentGroup);
-        }
-        currentGroup.to = index;
-        if (session.label) currentGroup.names.push(session.label);
-    });
-
-    let bannerHtml = '';
-    if (bannerGroups.length) {
-        // The leading blank keeps the banner aligned with the day columns, since
-        // a row's first cell always lands in the first column of the table.
-        bannerHtml = '<tr class="day-banner-row"><th class="col-student banner-blank"></th>';
-        let col = 0;
-        bannerGroups.forEach(group => {
-            for (let k = col; k < group.from; k++) {
-                bannerHtml += '<th class="col-day banner-blank"></th>';
-            }
-            const text = group.names.length ? group.names.join('  •  ') : '';
-            const fallback = group.type === 'holiday' ? 'Holiday' : 'Seminar';
-            bannerHtml += `<th class="day-banner is-${group.type} col-day" colspan="${group.to - group.from + 1}"
-                               data-date="${group.firstDate}" data-day-type="${group.type}"
-                               title="${escapeHtml(text || fallback)} &mdash; click to edit">${escapeHtml(text || fallback)}</th>`;
-            col = group.to + 1;
-        });
-        for (let k = col; k < classDates.length; k++) {
-            bannerHtml += '<th class="col-day banner-blank"></th>';
-        }
-        bannerHtml += '<th class="col-overall banner-blank"></th></tr>';
-    }
-
     let headerHtml = '<tr><th class="col-student">STUDENT NAME</th>';
 
     for (const d of classDates) {
@@ -171,13 +126,11 @@ function renderMonthlySheet(classDates, sessionsByDate, students, recordsMap) {
         // the column stands out from the ordinary class days.
         const typeClass = dayType ? ` col-${dayType}` : '';
         const weekendClass = isWeekend ? 'col-weekend' : '';
-        // The holiday or seminar name now lives in the banner row above, where it
-        // has room to read horizontally.
-        const labelHtml = '';
         const typeIcon = dayType === 'holiday' ? 'bi-cake2' : 'bi-mic';
 
         // Each day carries its own Save button. Pressing it finishes the column:
-        // everyone still unmarked becomes present.
+        // everyone still unmarked becomes present. A holiday or seminar column
+        // is locked, so it carries no Save button at all.
         const isCompleted = session ? String(session.is_completed) === '1' : false;
         const completedClass = isCompleted ? ' col-completed' : '';
 
@@ -185,39 +138,43 @@ function renderMonthlySheet(classDates, sessionsByDate, students, recordsMap) {
                        data-day-type="${dayType}" data-completed="${isCompleted ? '1' : '0'}" title="${escapeHtml(dayType ? dayType + ': ' + dayLabel : d.dateStr)}">
             <div class="day-header-day">${dayLetter}</div>
             <div class="day-header-date">${d.day}</div>
-            ${labelHtml}
             ${dayType ? `<i class="bi ${typeIcon} day-type-icon" aria-hidden="true"></i>` : ''}
-            <button type="button" class="day-save-btn ${isCompleted ? 'is-complete' : ''}"
+            ${!dayType ? `<button type="button" class="day-save-btn ${isCompleted ? 'is-complete' : ''}"
                     data-save-date="${d.dateStr}" data-save-session="${session ? session.id : 0}"
                     title="${isCompleted ? 'Day saved. Click to save again.' : 'Save this day: anyone left unmarked becomes present.'}"
                     aria-label="Save ${d.dateStr}">
                 <i class="bi ${isCompleted ? 'bi-check-circle-fill' : 'bi-save'}"></i>
                 <span class="day-save-text">${isCompleted ? 'Saved' : 'Save'}</span>
-            </button>
+            </button>` : ''}
         </th>`;
     }
 
     // Right-hand column: each student's own attendance for the month.
     headerHtml += '<th class="col-overall" title="Days attended out of the days met, and the percentage">ATTENDANCE</th>';
     headerHtml += '</tr>';
-    thead.innerHTML = bannerHtml + headerHtml;
+    thead.innerHTML = headerHtml;
 
     // Build body rows - 20 student rows
     let bodyHtml = '';
     const displayStudents = students.slice(0, 20);
+    // The grid always renders the same number of rows, so a merged cell
+    // must span every one of them to keep the columns aligned.
+    const gridRowCount = 20;
 
     // Days the teacher actually met, so every student's percentage is measured
-    // against the same denominator the overview panel reports.
+    // against the same denominator the overview panel reports. Holidays and
+    // seminars are locked and carry no marks, so they never count.
     const metDates = classDates.filter(d => {
         const session = sessionsByDate[d.dateStr];
         if (!session) return false;
+        if (session.session_type && session.session_type !== 'regular') return false;
         return students.some(student => {
             const record = recordsMap[`${session.id}_${student.id}`];
             return record && record.status;
         });
     });
 
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < gridRowCount; i++) {
         const student = displayStudents[i];
         bodyHtml += `<tr data-student-id="${student ? student.id : 0}">`;
 
@@ -242,11 +199,28 @@ function renderMonthlySheet(classDates, sessionsByDate, students, recordsMap) {
             const dayType = session && session.session_type && session.session_type !== 'regular'
                 ? session.session_type : '';
             const typeClass = dayType ? ` col-${dayType}` : '';
+
+            // A holiday or seminar column is locked: one merged cell runs
+            // down the whole grid carrying the day's name vertically, and
+            // every row after the first skips the cell entirely.
+            if (dayType) {
+                if (i === 0) {
+                    const dayLabel = session && session.label ? session.label : '';
+                    const fallback = dayType === 'holiday' ? 'Holiday' : 'Seminar';
+                    bodyHtml += `<td class="col-day ${weekendClass}${typeClass} day-merged" rowspan="${gridRowCount}"
+                                     data-date="${dateStr}" data-day-type="${dayType}"
+                                     title="${escapeHtml(dayType + (dayLabel ? ': ' + dayLabel : ''))}">
+                        <span class="merged-label">${escapeHtml(dayLabel || fallback)}</span>
+                    </td>`;
+                }
+                continue;
+            }
+
             const key = `${sessionId}_${student ? student.id : 0}`;
             const record = recordsMap[key];
             const status = record ? record.status : '';
 
-            bodyHtml += `<td class="col-day ${weekendClass}${typeClass}" data-date="${dateStr}" data-session-id="${sessionId}" data-student-id="${student ? student.id : 0}" data-record-id="${record ? record.id : ''}" data-status="${status}"${dayType ? ` data-day-type="${dayType}"` : ''}>
+            bodyHtml += `<td class="col-day ${weekendClass}${typeClass}" data-date="${dateStr}" data-session-id="${sessionId}" data-student-id="${student ? student.id : 0}" data-record-id="${record ? record.id : ''}" data-status="${status}">
                 <span class="status-mark ${status}">${getStatusSymbol(status)}</span>
             </td>`;
         }
@@ -273,7 +247,9 @@ function renderMonthlySheet(classDates, sessionsByDate, students, recordsMap) {
     // Attach click handlers
     tbody.addEventListener('click', function(e) {
         const cell = e.target.closest('td.col-day');
-        if (!cell) return;
+        // A locked column carries one merged label cell, which is not
+        // editable and opens no status menu.
+        if (!cell || cell.classList.contains('day-merged')) return;
         showStatusMenu(cell, e);
     });
 
@@ -383,13 +359,14 @@ function updateInfoBar(students, recordsMap, classDates) {
         for (const d of classDates) {
             const dateStr = d.dateStr;
             const session = sessions.find(s => s.date === dateStr);
-            if (session) {
-                const key = `${session.id}_${student.id}`;
-                const record = recordsMap[key];
-                if (record) {
-                    if (record.status === 'present') presentCount++;
-                    else if (record.status === 'absent') absentCount++;
-                }
+            // Locked days carry no marks, so they never
+            // contribute to the month's totals.
+            if (!session || (session.session_type && session.session_type !== 'regular')) continue;
+            const key = `${session.id}_${student.id}`;
+            const record = recordsMap[key];
+            if (record) {
+                if (record.status === 'present') presentCount++;
+                else if (record.status === 'absent') absentCount++;
             }
         }
     });
@@ -450,6 +427,9 @@ function updateMonthOverview(students, recordsMap, classDates, sessionsByDate) {
         classDates.forEach(d => {
             const session = sessionsByDate[d.dateStr];
             if (!session) return;
+            // Holidays and seminars are locked and hold no marks,
+            // so they never reach the totals.
+            if (session.session_type && session.session_type !== 'regular') return;
 
             const record = recordsMap[`${session.id}_${student.id}`];
             const status = record ? record.status : '';
@@ -468,7 +448,9 @@ function updateMonthOverview(students, recordsMap, classDates, sessionsByDate) {
     let daysSaved = 0;
     classDates.forEach(d => {
         const session = sessionsByDate[d.dateStr];
-        if (session && String(session.is_completed) === '1') daysSaved++;
+        if (!session) return;
+        if (session.session_type && session.session_type !== 'regular') return;
+        if (String(session.is_completed) === '1') daysSaved++;
     });
 
     const set = (id, value) => {

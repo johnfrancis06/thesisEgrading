@@ -511,7 +511,8 @@ class AttendanceHelper {
             SUM(CASE WHEN status = 'excused' THEN 1 ELSE 0 END) as excused_count
             FROM attendance_record ar
             JOIN attendance_session ase ON ar.attendance_session_id = ase.id
-            WHERE ar.student_id = ? AND ase.class_section_id = ?";
+            WHERE ar.student_id = ? AND ase.class_section_id = ?
+              AND ase.session_type = 'regular'";
         
         $stmt = $db->prepare($sql);
         $stmt->bind_param("ii", $studentId, $classId);
