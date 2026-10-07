@@ -181,8 +181,23 @@ $sheetPrintCss = gradesheet_print_css();
 
         document.getElementById('sheetPreview')?.addEventListener('input', function (e) {
             const el = e.target;
-            if (el?.getAttribute?.('data-field')) editedFields.add(el);
+            if (el?.getAttribute?.('data-field')) {
+                editedFields.add(el);
+                // Mirror the change to all other elements with the same data-field
+                const key = el.getAttribute('data-field');
+                const value = el.innerText;
+                sheetElements().forEach(other => {
+                    if (other !== el && other.getAttribute('data-field') === key) {
+                        other.innerText = value;
+                    }
+                });
+            }
         });
+
+        document.getElementById('sheetPreview')?.addEventListener('blur', function (e) {
+            const el = e.target;
+            if (el?.getAttribute?.('data-field')) editedFields.add(el);
+        }, true);
 
         function sheetElements() {
             return document.querySelectorAll('#sheetPreview [data-field]');

@@ -131,17 +131,32 @@ function gradesheet_docx_row($table, array $widths, array $texts, array $style =
     return $table;
 }
 
-/** The logo, sized to fit a given width in millimetres without upscaling. */
-function gradesheet_docx_logo($cell, $logoPath, $targetMm) {
+/** The logo, sized to a target width in millimetres, never upscaled. */
+function gradesheet_docx_logo($cell, $logoPath, $targetMm, $center = false) {
     $info = @getimagesize($logoPath);
     if (!$info) {
-        $cell->addText('LOGO', ['size' => 8]);
+        $cell->addText('LOGO', ['size' => 8], $center ? ['jc' => 'center'] : null);
         return;
     }
-    // PhpWord image dimensions are in pixels at 96 dpi.
-    $widthPx = min($targetMm / 25.4 * Drawing::DPI_96, $info[0]);
-    $heightPx = $widthPx * ($info[1] / $info[0]);
-    $cell->addImage($logoPath, ['width' => $widthPx, 'height' => $heightPx]);
+    // This writer renders inline images as VML shapes sized in points (72 pt
+    // = 25.4 mm). Cap to the source's natural width in points so it is never
+    // upscaled.
+    $widthPt  = min($targetMm * 72 / 25.4, $info[0] / Drawing::DPI_96 * 72);
+    $heightPt = $widthPt * ($info[1] / $info[0]);
+    $style = ['width' => $widthPt, 'height' => $heightPt];
+    if ($center) {
+        // Inline images are centred by their paragraph: FrameStyle::alignment
+        // maps to <w:jc w:val="center"/> written by the image style writer.
+        $style['alignment'] = 'center';
+    }
+    $cell->addImage($logoPath, $style);
+}
+
+/** Writes a "Label: Value" pair on one line, with only the value bolded. */
+function gradesheet_docx_label_value($cell, $label, $value, $plainStyle, $boldStyle) {
+    $run = $cell->addTextRun(['jc' => 'left']);
+    $run->addText((string) $label, $plainStyle);
+    $run->addText((string) $value, $boldStyle);
 }
 
 $phpWord = new PhpWord();
@@ -198,30 +213,59 @@ foreach ($chunks as $pageIndex => $pageRows) {
     $pageNumber = $pageIndex + 1;
     $isLast = ($pageNumber === $totalPages);
 
-    // ---- Document-control header table -----------------------------------
+    // ---- Document-control header table (REG-F12) ---------------------------
+    // Four rows, three columns. PhpWord spells rowspan as vMerge: the leading
+    // cell of each span uses vMerge='restart' and every row it continues
+    // through carries an empty vMerge='continue' cell, so each row still has
+    // three cells in the column grid:
+    //   col1 logo           -> rows 1-4 (restart row 1, continue 2-4)
+    //   col2 Document Type -> rows 1-2 (restart row 1, continue row 2)
+    //   col2 Document Title -> rows 3-4 (restart row 3, continue row 4)
+    //   col3 Document Code / Revision No. / Effective Date / Page
+    // Only the values are bolded, mirroring gradesheet_value() in the HTML
+    // template so the Word header matches the browser and PDF output.
     $header = gradesheet_docx_table($section, $borderedTable);
+    $boldValue = $headStyle;            // ['bold' => true, 'size' => 9]
+    $isoStyle  = ['size' => 8, 'italic' => true];
+    $vmLogo    = ['vMerge' => 'restart', 'vAlign' => CellStyle::VALIGN_CENTER];
+    $vmLeft    = ['vMerge' => 'restart', 'vAlign' => CellStyle::VALIGN_TOP];
+    $vmCont    = ['vMerge' => 'continue'];
 
+    // Row 1: logo + Document Type box + Document Code.
     $header->addRow();
-    $logoCell = $header->addCell($headerWidths[0], ['vAlign' => CellStyle::VALIGN_CENTER]);
+    $logoCell = $header->addCell($headerWidths[0], $vmLogo);
     if ($haveLogo) {
-        gradesheet_docx_logo($logoCell, $logoPath, 24);
+        gradesheet_docx_logo($logoCell, $logoPath, 20, true);
     } else {
-        $logoCell->addText('LOGO', ['size' => 8]);
+        $logoCell->addText('LOGO', ['size' => 8], ['jc' => 'center']);
     }
-    $header->addCell($headerWidths[1])->addText('Document Type: ' . $meta['document_type'], $bodyStyle);
-    $header->addCell($headerWidths[2])->addText('Document Code: ' . $meta['document_code'], $bodyStyle);
+    $docTypeCell = $header->addCell($headerWidths[1], $vmLeft);
+    gradesheet_docx_label_value($docTypeCell, 'Document Type: ', $meta['document_type'], $bodyStyle, $boldValue);
+    $docTypeCell->addText($meta['iso_line'], $isoStyle);
+    $codeCell = $header->addCell($headerWidths[2]);
+    gradesheet_docx_label_value($codeCell, 'Document Code: ', $meta['document_code'], $bodyStyle, $boldValue);
 
-    gradesheet_docx_row($header, [$headerWidths[1], $headerWidths[2]], [
-        $meta['iso_line'],
-        'Revision No.: ' . $meta['revision_no'],
-    ], $bodyStyle);
-
-    // Document title on the left; effective date over the page counter on the right.
+    // Row 2: Revision No. (Document Type keeps its rowspan=2 hold).
     $header->addRow();
-    $header->addCell($headerWidths[1])->addText('Document Title: ' . $meta['document_title'], $bodyStyle);
+    $header->addCell($headerWidths[0], $vmCont);
+    $header->addCell($headerWidths[1], $vmCont);
+    $revCell = $header->addCell($headerWidths[2]);
+    gradesheet_docx_label_value($revCell, 'Revision No.: ', $meta['revision_no'], $bodyStyle, $boldValue);
+
+    // Row 3: Document Title box + Effective Date.
+    $header->addRow();
+    $header->addCell($headerWidths[0], $vmCont);
+    $docTitleCell = $header->addCell($headerWidths[1], $vmLeft);
+    gradesheet_docx_label_value($docTitleCell, 'Document Title: ', $meta['document_title'], $bodyStyle, $boldValue);
     $dateCell = $header->addCell($headerWidths[2]);
-    $dateCell->addText('Effective Date: ' . $meta['effective_date'], $bodyStyle);
-    $dateCell->addText('Page ' . $pageNumber . ' of ' . $totalPages, ['size' => 8]);
+    gradesheet_docx_label_value($dateCell, 'Effective Date: ', $meta['effective_date'], $bodyStyle, $boldValue);
+
+    // Row 4: page counter (computed, never editable).
+    $header->addRow();
+    $header->addCell($headerWidths[0], $vmCont);
+    $header->addCell($headerWidths[1], $vmCont);
+    $pageCell = $header->addCell($headerWidths[2]);
+    $pageCell->addText('Page: ' . $pageNumber . ' of ' . $totalPages, ['size' => 8], ['jc' => 'left']);
 
     $section->addText('');
 

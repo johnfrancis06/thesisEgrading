@@ -2165,8 +2165,8 @@ try {
         echo gradesheet_render($sheetData);
     }
     elseif ($action === 'save_report_settings') {
-        $classId = intval($_POST['class_id'] ?? $_GET['class_id'] ?? 0);
         $payload = json_decode(file_get_contents("php://input"), true);
+        $classId = intval($payload['class_id'] ?? $_POST['class_id'] ?? $_GET['class_id'] ?? 0);
         $fields = $payload['fields'] ?? [];
 
         if ($classId <= 0 || !is_array($fields) || empty($fields)) {
@@ -2200,6 +2200,19 @@ try {
             'code' => '', 'title' => '', 'course_program' => '',
             'year_level' => '', 'section' => '', 'academic_year' => '', 'semester' => 1,
         ]));
+
+        // Static fallback to ensure footer fields are always allowed even if the
+        // dynamic call misses any (e.g. function signature changes).
+        $metaAllowlist = array_merge($metaAllowlist, [
+            'certification',
+            'facilitator_name',
+            'program_chair',
+            'dean',
+            'registrar',
+            'date_received',
+            'note',
+        ]);
+        $metaAllowlist = array_unique($metaAllowlist);
 
         $saved = 0;
         $skipped = 0;
@@ -2303,9 +2316,8 @@ try {
         // switches. Nothing else may be written under a report_settings key.
         $allowlist = [
             'course_number', 'course_title', 'semester_term', 'course_and_year',
-            'class_record_note', 'submitted_by',
+            'class_record_note',
             'facilitator_name', 'program_chair', 'satellite_director',
-            'prog_coordinator', 'dean', 'registrar',
             'cr_paper', 'cr_term_year', 'cr_period_split', 'cr_from_month',
             'cr_to_month', 'cr_rotate_dates',
         ];

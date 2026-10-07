@@ -358,7 +358,7 @@ if (!function_exists('classrecord_render')) {
      * Printed once, directly under the last student row, in the same plain Times
      * face as the grid and never split across a page break.
      *
-     * One table for the whole footer, on four equal columns, is what makes it line
+     * One table for the whole footer, on three equal columns, is what makes it line
      * up: every label sits on the same baseline, every typed name on the next, and
      * every role on the one after that. Three separate tables with three different
      * column splits could not do that - each band would start its own grid and the
@@ -374,14 +374,13 @@ if (!function_exists('classrecord_render')) {
         $e = 'classrecord_e';
 
         $html  = '<div class="cr-footer"><table class="cr-foot-grid"><colgroup>'
-               . '<col style="width:25%"><col style="width:25%"><col style="width:25%">'
-               . '<col style="width:25%"></colgroup>';
+               . '<col style="width:33.33%"><col style="width:33.33%"><col style="width:33.34%"></colgroup>';
 
         // The note spans the whole grid so the text is not broken into a column.
-        $html .= '<tr><td class="cr-foot-note" colspan="4">' . $e($meta['class_record_note']) . '</td></tr>';
+        $html .= '<tr><td class="cr-foot-note" colspan="3">' . $e($meta['class_record_note']) . '</td></tr>';
 
         // A blank row, not a border, separates the two bands of signatures.
-        $html .= '<tr class="cr-foot-gap"><td colspan="4"></td></tr>';
+        $html .= '<tr class="cr-foot-gap"><td colspan="3"></td></tr>';
 
         $html .= '<tr>';
         $html .= '<td>' . classrecord_signature_html(
@@ -390,26 +389,12 @@ if (!function_exists('classrecord_render')) {
                    'Noted:', $meta['program_chair_upper'], 'Program Chair') . '</td>';
         $html .= '<td>' . classrecord_signature_html(
                    'Approved:', $meta['satellite_director_upper'], 'Satellite College Director') . '</td>';
-        $html .= '<td>' . classrecord_signature_html(
-                   'Submitted by:',
-                   $meta['submitted_by_upper'] ?? strtoupper($meta['submitted_by']),
-                   'Professor'
-               ) . '</td>';
         $html .= '</tr>';
 
-        $html .= '<tr class="cr-foot-gap"><td colspan="4"></td></tr>';
+        $html .= '<tr class="cr-foot-gap"><td colspan="3"></td></tr>';
 
         $html .= '<tr>';
-        $html .= '<td>' . classrecord_signature_html(
-                   'Received:', $meta['registrar_upper'], 'Registrar') . '</td>';
-        // Prog. Coordinator and Dean share one "Noted" line, so the label carries
-        // both names and the role goes underneath. With neither name set the line
-        // is just "Noted:" rather than a dangling separator.
-        $progDean = trim($meta['prog_coordinator_upper'] ?? '') . ' / ' . trim($meta['dean_upper'] ?? '');
-        $html .= '<td>' . classrecord_signature_html(
-                   'Noted: ' . $e(trim($progDean, " /")),
-                   '', 'Prog. Coordinator / Dean') . '</td>';
-        // Date carries no name, so the label is the whole block.
+        $html .= '<td>' . classrecord_signature_html('Date:', '', '') . '</td>';
         $html .= '<td>' . classrecord_signature_html('Date:', '', '') . '</td>';
         $html .= '<td>' . classrecord_signature_html('Date:', '', '') . '</td>';
         $html .= '</tr>';

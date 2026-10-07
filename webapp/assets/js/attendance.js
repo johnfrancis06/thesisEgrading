@@ -821,13 +821,9 @@ async function showClassRecord() {
                             names the Grade Sheet footer uses.
                         </p>
                         <div class="row g-2 mb-4">
-                            ${field('submitted_by', 'Submitted by (Professor)')}
                             ${field('facilitator_name', 'Course Facilitator')}
                             ${field('program_chair', 'Program Chair')}
                             ${field('satellite_director', 'Satellite College Director')}
-                            ${field('prog_coordinator', 'Prog. Coordinator')}
-                            ${field('dean', 'Dean')}
-                            ${field('registrar', 'Registrar')}
                         </div>
 
                         <h6 class="fw-bold mb-2"><i class="bi bi-printer me-1"></i>Paper</h6>

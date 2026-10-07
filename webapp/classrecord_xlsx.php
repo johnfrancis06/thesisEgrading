@@ -262,15 +262,10 @@ $signature = function ($label, $name, $role) use (&$addRow, $STYLE_FOOT) {
 $signature('Prepared by:', $meta['facilitator_name_upper'] ?? '', 'Course Facilitator');
 $signature('Noted:', $meta['program_chair_upper'] ?? '', 'Program Chair');
 $signature('Approved:', $meta['satellite_director_upper'] ?? '', 'Satellite College Director');
-$signature('Submitted by:',
-    $meta['submitted_by_upper'] ?? $meta['submitted_by'] ?? '', 'Professor');
 
 $addRow([['', $STYLE_FOOT]], 8);
 
-$signature('Received:', $meta['registrar_upper'] ?? '', 'Registrar');
-$progDean = trim((string)($meta['prog_coordinator_upper'] ?? '')) . ' / '
-    . trim((string)($meta['dean_upper'] ?? ''));
-$signature('Noted: ' . trim($progDean, " /"), '', 'Prog. Coordinator / Dean');
+$signature('Date:', '', '');
 $signature('Date:', '', '');
 $signature('Date:', '', '');
 

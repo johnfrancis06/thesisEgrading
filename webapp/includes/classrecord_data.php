@@ -37,16 +37,12 @@ function classrecord_defaults($class, $facultyName = '') {
         'semester_term'    => $semesterNo . ' Semester ' . ($academicYear ? $academicYear : ''),
         'course_and_year'  => $program,
         // Footer
-        'class_record_note' => 'Note: This is a class record form. The faculty is given freedom to '
-                             . 'select the kind of class record whether E-grading or manual computation '
-                             . 'to include the Criteria in giving grades.',
-        'submitted_by'     => $facultyName,          // printed above the "Professor" line
+'class_record_note' => 'Note: This is a class record form. The faculty is given freedom to '
+                              . 'select the kind of class record whether E-grading or manual computation '
+                              . 'to include the Criteria in giving grades.',
         'facilitator_name' => $facultyName,
         'program_chair'    => '',
         'satellite_director' => '',
-        'prog_coordinator' => '',
-        'dean'             => '',
-        'registrar'        => '',
         // Layout
         'cr_paper'         => 'legal',               // legal | a4
         'cr_term_year'     => 0,                     // 0 = the latest year that has sessions
@@ -575,8 +571,7 @@ function classrecord_load($db, $classId, $facultyName = '') {
     }
 
     // Footer names are printed in upper case, as the form requires.
-    foreach (['submitted_by', 'facilitator_name', 'program_chair', 'satellite_director',
-              'prog_coordinator', 'dean', 'registrar'] as $key) {
+    foreach (['facilitator_name', 'program_chair', 'satellite_director'] as $key) {
         $meta[$key . '_upper'] = strtoupper(trim((string)($meta[$key] ?? '')));
     }
 

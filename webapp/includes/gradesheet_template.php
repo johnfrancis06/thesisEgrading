@@ -45,28 +45,41 @@ if (!function_exists('gradesheet_render')) {
      */
     function gradesheet_header_html($meta, $logoDataUri, $pageLabel) {
         $e = 'gradesheet_e';
+        $v = 'gradesheet_value';
+
+        // Single outer table with 4 explicit rows
+        // Logo spans all 4, center splits at row 2/3 boundary, right has 4 separate rows
         $html  = '<table class="gs-header">';
-        $html .= '<colgroup><col style="width:20%"><col style="width:45%"><col style="width:35%"></colgroup>';
+        $html .= '<colgroup><col style="width:15%"><col style="width:58%"><col style="width:27%"></colgroup>';
 
-        // Row 1: logo spans all three rows.
+        // Row 1: Logo starts rowspan=4; Center top starts rowspan=2; Right: Document Code
         $html .= '<tr>';
-        $html .= '<td rowspan="3" class="gs-header-logo">' . gradesheet_logo_html($logoDataUri) . '</td>';
-        $html .= '<td class="gs-kv">Document Type: ' . gradesheet_value($meta['document_type'], 'document_type') . '</td>';
-        $html .= '<td class="gs-kv">Document Code: ' . gradesheet_value($meta['document_code'], 'document_code') . '</td>';
+        $html .= '<td rowspan="4" class="gs-header-logo">' . gradesheet_logo_html($logoDataUri) . '</td>';
+        $html .= '<td rowspan="2" class="gs-center-top">';
+        $html .= '<div class="gs-doc-type-label">Document Type:</div>';
+        $html .= '<div class="gs-doc-type-value">' . $v($meta['document_type'], 'document_type') . '</div>';
+        $html .= '<div class="gs-iso">' . $e($meta['iso_line']) . '</div>';
+        $html .= '</td>';
+        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Document Code</td><td class="gs-control-value">' . $v($meta['document_code'], 'document_code') . '</td></tr></table></td>';
         $html .= '</tr>';
 
-        // Row 2: ISO line, revision number.
+        // Row 2: Right: Revision No. (Center top continues via rowspan)
         $html .= '<tr>';
-        $html .= '<td class="gs-kv">' . $e($meta['iso_line']) . '</td>';
-        $html .= '<td class="gs-kv">Revision No.: ' . gradesheet_value($meta['revision_no'], 'revision_no') . '</td>';
+        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Revision No.</td><td class="gs-control-value">' . $v($meta['revision_no'], 'revision_no') . '</td></tr></table></td>';
         $html .= '</tr>';
 
-        // Row 3: document title, effective date and the page counter. The page
-        // number is computed, never editable, so it cannot be broken by hand.
+        // Row 3: Center bottom starts rowspan=2; Right: Effective Date
         $html .= '<tr>';
-        $html .= '<td class="gs-kv">Document Title: ' . gradesheet_value($meta['document_title'], 'document_title') . '</td>';
-        $html .= '<td class="gs-kv">Effective Date: ' . gradesheet_value($meta['effective_date'], 'effective_date')
-               . '<br><span class="gs-page">Page ' . $e($pageLabel) . '</span></td>';
+        $html .= '<td rowspan="2" class="gs-center-bottom">';
+        $html .= '<div class="gs-doc-title-label">Document Title:</div>';
+        $html .= '<div class="gs-doc-title-value">' . $v($meta['document_title'], 'document_title') . '</div>';
+        $html .= '</td>';
+        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Effective Date</td><td class="gs-control-value">' . $v($meta['effective_date'], 'effective_date') . '</td></tr></table></td>';
+        $html .= '</tr>';
+
+        // Row 4: Right: Page (Center bottom continues via rowspan)
+        $html .= '<tr>';
+        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Page</td><td class="gs-control-value">' . $e($pageLabel) . '</td></tr></table></td>';
         $html .= '</tr>';
 
         $html .= '</table>';
@@ -253,16 +266,115 @@ if (!function_exists('gradesheet_render')) {
            rescales every column - so the columns no longer match the values
            written here or the .docx column widths. */
         .sheet table, .sheet th, .sheet td { box-sizing: border-box; }
-        .gs-header { width: 100%; border-collapse: collapse; margin-bottom: 2mm; }
-        .gs-header td { border: 1px solid #000; padding: 1mm 1.5mm; vertical-align: middle; }
-        .gs-header-logo { text-align: center; width: 20%; }
-        .gs-logo { max-width: 100%; max-height: 26mm; object-fit: contain; }
+        
+        /* Header: official Capiz State University Grade Sheet form */
+        .gs-header { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-bottom: 2mm; 
+            table-layout: fixed; 
+            border: 1px solid #000; 
+        }
+        .gs-header td { 
+            border: 1px solid #000; 
+            padding: 0; 
+            vertical-align: middle; 
+        }
+        .gs-header-logo { 
+            text-align: center; 
+            width: 15%; 
+            padding: 2mm 1mm; 
+        }
+        .gs-header-logo img { 
+            max-width: 18mm; 
+            max-height: 24mm; 
+            object-fit: contain; 
+            border: none; 
+            outline: none; 
+            box-shadow: none; 
+        }
         .gs-logo-placeholder {
             border: 1px dashed #999; color: #777; font-size: 7pt; line-height: 1.2;
-            padding: 4mm 1mm; font-family: Arial, sans-serif;
+            padding: 3mm 1mm; font-family: Arial, sans-serif;
         }
-        .gs-kv { font-size: 9pt; }
-        .gs-page { font-size: 8pt; }
+        
+        /* Force 4 equal-height rows on outer table */
+        .gs-header tr { height: 25%; }
+        
+        /* Center top cell (rowspan=2) */
+        .gs-center-top { 
+            width: 58%; 
+            padding: 2mm 3mm; 
+            vertical-align: middle;
+        }
+        .gs-doc-type-label {
+            font-size: 8.5pt;
+            font-weight: normal;
+            margin-bottom: 1mm;
+            text-align: left;
+        }
+        .gs-doc-type-value {
+            font-size: 16pt;
+            font-weight: bold;
+            text-align: center;
+            margin: 1mm 0;
+            line-height: 1.2;
+        }
+        .gs-iso {
+            font-size: 9pt;
+            font-style: italic;
+            text-align: center;
+            margin-top: 1mm;
+        }
+        
+        /* Center bottom cell (rowspan=2) */
+        .gs-center-bottom { 
+            width: 58%; 
+            padding: 2mm 3mm; 
+            vertical-align: middle;
+        }
+        .gs-doc-title-label {
+            font-size: 8.5pt;
+            font-weight: normal;
+            margin-bottom: 1mm;
+            text-align: left;
+        }
+        .gs-doc-title-value {
+            font-size: 16pt;
+            font-weight: bold;
+            text-align: center;
+            line-height: 1.2;
+        }
+        
+        /* Right section control cells */
+        .gs-control-cell { 
+            width: 27%; 
+            padding: 0; 
+            vertical-align: middle;
+        }
+        .gs-control-table { 
+            width: 100%; 
+            height: 100%; 
+            border-collapse: collapse; 
+            table-layout: fixed; 
+            border: none; 
+        }
+        .gs-control-table td { 
+            border: 1px solid #000; 
+            padding: 0.8mm 1.5mm; 
+            font-size: 8.5pt;
+            vertical-align: middle;
+        }
+        .gs-control-label { 
+            width: 55%; 
+            font-weight: normal; 
+            text-align: left; 
+        }
+        .gs-control-value { 
+            width: 45%; 
+            font-weight: bold; 
+            text-align: center; 
+        }
 
         .gs-course-info { width: 100%; border-collapse: collapse; margin-bottom: 2mm; }
         .gs-course-info td { border: 1px solid #000; padding: 1mm 1.5mm; font-size: 9pt; }
@@ -384,8 +496,13 @@ if (!function_exists('gradesheet_render')) {
 
             .no-print, .edit-toolbar { display: none !important; }
             thead { display: table-header-group; }
-            tr, .footer-block { page-break-inside: avoid; }
+            tr, .footer-block, .gs-header { page-break-inside: avoid; break-inside: avoid; }
             * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            
+            /* Ensure header borders print cleanly */
+            .gs-header, .gs-header td, .gs-control-table td {
+                border: 1px solid #000 !important;
+            }
         }
         ';
     }
