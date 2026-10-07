@@ -47,12 +47,14 @@ if (!function_exists('gradesheet_render')) {
         $e = 'gradesheet_e';
         $v = 'gradesheet_value';
 
-        // Single outer table with 4 explicit rows
-        // Logo spans all 4, center splits at row 2/3 boundary, right has 4 separate rows
+        // One flat table: logo | center | control label | control value.
+        // The right-hand document-control cells are direct cells of this
+        // table, so the grid lines run continuously and no cell holds a
+        // second bordered table inside it.
         $html  = '<table class="gs-header">';
-        $html .= '<colgroup><col style="width:15%"><col style="width:58%"><col style="width:27%"></colgroup>';
+        $html .= '<colgroup><col style="width:15%"><col style="width:58%"><col style="width:15.5%"><col style="width:11.5%"></colgroup>';
 
-        // Row 1: Logo starts rowspan=4; Center top starts rowspan=2; Right: Document Code
+        // Row 1: Logo spans all 4 rows; Center top spans 2; Document Code
         $html .= '<tr>';
         $html .= '<td rowspan="4" class="gs-header-logo">' . gradesheet_logo_html($logoDataUri) . '</td>';
         $html .= '<td rowspan="2" class="gs-center-top">';
@@ -60,26 +62,30 @@ if (!function_exists('gradesheet_render')) {
         $html .= '<div class="gs-doc-type-value">' . $v($meta['document_type'], 'document_type') . '</div>';
         $html .= '<div class="gs-iso">' . $e($meta['iso_line']) . '</div>';
         $html .= '</td>';
-        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Document Code</td><td class="gs-control-value">' . $v($meta['document_code'], 'document_code') . '</td></tr></table></td>';
+        $html .= '<td class="gs-control-label">Document Code</td>';
+        $html .= '<td class="gs-control-value">' . $v($meta['document_code'], 'document_code') . '</td>';
         $html .= '</tr>';
 
-        // Row 2: Right: Revision No. (Center top continues via rowspan)
+        // Row 2: Revision No. (Center top continues via rowspan)
         $html .= '<tr>';
-        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Revision No.</td><td class="gs-control-value">' . $v($meta['revision_no'], 'revision_no') . '</td></tr></table></td>';
+        $html .= '<td class="gs-control-label">Revision No.</td>';
+        $html .= '<td class="gs-control-value">' . $v($meta['revision_no'], 'revision_no') . '</td>';
         $html .= '</tr>';
 
-        // Row 3: Center bottom starts rowspan=2; Right: Effective Date
+        // Row 3: Center bottom starts rowspan=2; Effective Date
         $html .= '<tr>';
         $html .= '<td rowspan="2" class="gs-center-bottom">';
         $html .= '<div class="gs-doc-title-label">Document Title:</div>';
         $html .= '<div class="gs-doc-title-value">' . $v($meta['document_title'], 'document_title') . '</div>';
         $html .= '</td>';
-        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Effective Date</td><td class="gs-control-value">' . $v($meta['effective_date'], 'effective_date') . '</td></tr></table></td>';
+        $html .= '<td class="gs-control-label">Effective Date</td>';
+        $html .= '<td class="gs-control-value">' . $v($meta['effective_date'], 'effective_date') . '</td>';
         $html .= '</tr>';
 
-        // Row 4: Right: Page (Center bottom continues via rowspan)
+        // Row 4: Page (Center bottom continues via rowspan)
         $html .= '<tr>';
-        $html .= '<td class="gs-control-cell"><table class="gs-control-table"><tr><td class="gs-control-label">Page</td><td class="gs-control-value">' . $e($pageLabel) . '</td></tr></table></td>';
+        $html .= '<td class="gs-control-label">Page</td>';
+        $html .= '<td class="gs-control-value">' . $e($pageLabel) . '</td>';
         $html .= '</tr>';
 
         $html .= '</table>';
@@ -346,38 +352,29 @@ if (!function_exists('gradesheet_render')) {
             line-height: 1.2;
         }
         
-        /* Right section control cells */
-        .gs-control-cell { 
-            width: 27%; 
-            padding: 0; 
-            vertical-align: middle;
-        }
-        .gs-control-table { 
-            width: 100%; 
-            height: 100%; 
-            border-collapse: collapse; 
-            table-layout: fixed; 
-            border: none; 
-        }
-        .gs-control-table td { 
-            border: 1px solid #000; 
-            padding: 0.8mm 1.5mm; 
+        /* Right section document-control cells - direct cells of
+           the header table, so the vertical and horizontal grid
+           lines run continuously with no nested box. */
+        .gs-control-label {
+            font-weight: normal;
+            text-align: left;
             font-size: 8.5pt;
-            vertical-align: middle;
+            padding: 0.8mm 1.5mm;
         }
-        .gs-control-label { 
-            width: 55%; 
-            font-weight: normal; 
-            text-align: left; 
-        }
-        .gs-control-value { 
-            width: 45%; 
-            font-weight: bold; 
-            text-align: center; 
+        .gs-control-value {
+            font-weight: bold;
+            text-align: center;
+            font-size: 8.5pt;
+            padding: 0.8mm 1.5mm;
         }
 
         .gs-course-info { width: 100%; border-collapse: collapse; margin-bottom: 2mm; }
-        .gs-course-info td { border: 1px solid #000; padding: 1mm 1.5mm; font-size: 9pt; }
+        /* The course strip keeps the field layout in place
+           but carries no box around it. */
+        .gs-course-info td { border: 0; padding: 1mm 1.5mm; font-size: 9pt; }
+        /* The values are fill-in fields on the printed form, so they
+           carry a rule underneath the bold text, like the Excel form. */
+        .gs-course-info td b { text-decoration: underline; }
 
         .gs-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         .gs-table th, .gs-table td {
@@ -500,7 +497,7 @@ if (!function_exists('gradesheet_render')) {
             * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             
             /* Ensure header borders print cleanly */
-            .gs-header, .gs-header td, .gs-control-table td {
+            .gs-header, .gs-header td {
                 border: 1px solid #000 !important;
             }
         }
